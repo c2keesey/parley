@@ -1,4 +1,4 @@
-# claude-speak
+# parley
 
 Voice output for [Claude Code](https://claude.com/claude-code).
 
@@ -15,7 +15,7 @@ never have to look at the terminal.
 - **Tells the model it is being listened to.** A `SessionStart` hook injects one
   line of context, so Claude writes speakable prose instead of markdown and
   file paths. Nothing is post-processed — what it writes is what you hear.
-- **Lets Claude speak mid-task.** `claude-speak say "..."` queues a line from
+- **Lets Claude speak mid-task.** `parley say "..."` queues a line from
   anywhere, so a long job can narrate itself instead of going silent.
 - **Never overlaps.** Everything goes through one queue drained by a single
   player. Replies, status updates and voice samples all take turns.
@@ -24,19 +24,19 @@ never have to look at the terminal.
 ## Install
 
 ```sh
-uv tool install claude-speak      # or: pipx install claude-speak
-claude-speak install              # wires the hooks into ~/.claude/settings.json
+uv tool install parley      # or: pipx install parley
+parley install              # wires the hooks into ~/.claude/settings.json
 ```
 
-`claude-speak install` is idempotent and leaves any hooks you already have
+`parley install` is idempotent and leaves any hooks you already have
 alone. It backs up `settings.json` before writing. To undo it:
 
 ```sh
-claude-speak uninstall
+parley uninstall
 ```
 
 You need an OpenAI API key, either in `OPENAI_API_KEY` or in a file at
-`~/.config/claude-speak/env` containing `OPENAI_API_KEY=sk-...`.
+`~/.config/parley/env` containing `OPENAI_API_KEY=sk-...`.
 
 macOS only for now — playback uses `afplay`. `ffmpeg` is optional; without it
 you lose only the Bluetooth warm-up described below.
@@ -44,17 +44,17 @@ you lose only the Bluetooth warm-up described below.
 ## Use
 
 ```sh
-claude-speak on                 # speak replies in this session
-claude-speak off                # stop
-claude-speak status
+parley on                 # speak replies in this session
+parley off                # stop
+parley status
 
-claude-speak say "Tests are green, deploying now."
-claude-speak say --voice nova "Heads up, that migration looks wrong."
-claude-speak say --wait "..."   # block until spoken
+parley say "Tests are green, deploying now."
+parley say --voice nova "Heads up, that migration looks wrong."
+parley say --wait "..."   # block until spoken
 
-claude-speak voices             # audition all eleven voices
-claude-speak stop               # drop the queue, silence everything
-claude-speak default on         # new sessions start speaking
+parley voices             # audition all eleven voices
+parley stop               # drop the queue, silence everything
+parley default on         # new sessions start speaking
 ```
 
 Turning it on mid-session works without a restart: the confirmation it prints
@@ -63,20 +63,20 @@ as context.
 
 ## Hands-free input
 
-Voice output alone still leaves you typing. `claude-speak listen` closes the
+Voice output alone still leaves you typing. `parley listen` closes the
 loop: say the wake phrase, dictate, say the send phrase, and the message is
 typed into your Claude Code pane and submitted.
 
 ```sh
 brew install whisper-cpp     # one-time
-claude-speak listen on       # from inside the tmux pane running Claude Code
-claude-speak listen status
-claude-speak listen off
+parley listen on       # from inside the tmux pane running Claude Code
+parley listen status
+parley listen off
 ```
 
 Defaults: say **"okay computer"**, talk, then **"send it"**. A rising tone
 confirms it woke, a higher one confirms it sent, a low one means capture
-expired. Change the phrases with `CLAUDE_SPEAK_WAKE` and `CLAUDE_SPEAK_SEND`.
+expired. Change the phrases with `PARLEY_WAKE` and `PARLEY_SEND`.
 
 ### Why it doesn't over-trigger, or cost much
 
@@ -115,18 +115,18 @@ Every knob is an environment variable.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `CLAUDE_SPEAK_VOICE` | `fable` | one of the eleven OpenAI voices |
-| `CLAUDE_SPEAK_MODEL` | `gpt-4o-mini-tts-2025-12-15` | falls back if retired |
-| `CLAUDE_SPEAK_SPEED` | `1.2` | |
-| `CLAUDE_SPEAK_INSTRUCTIONS` | conversational | delivery notes for `gpt-*` models |
-| `CLAUDE_SPEAK_MAX_CHARS` | `3000` | caps a single utterance |
-| `CLAUDE_SPEAK_ENV` | — | extra file to read the API key from |
-| `CLAUDE_SPEAK_WAKE` | `okay computer` | phrase that starts capture |
-| `CLAUDE_SPEAK_SEND` | `send it` | phrase that submits |
-| `CLAUDE_SPEAK_MIC` | `0` | avfoundation input device index |
-| `CLAUDE_SPEAK_MIC_THRESHOLD` | `500` | raise it in a noisy room |
-| `CLAUDE_SPEAK_STT_MODEL` | `gpt-4o-transcribe` | transcribes the dictated message |
-| `CLAUDE_SPEAK_STATE` | `~/.claude/speak` | queue, logs, session flags |
+| `PARLEY_VOICE` | `fable` | one of the eleven OpenAI voices |
+| `PARLEY_MODEL` | `gpt-4o-mini-tts-2025-12-15` | falls back if retired |
+| `PARLEY_SPEED` | `1.2` | |
+| `PARLEY_INSTRUCTIONS` | conversational | delivery notes for `gpt-*` models |
+| `PARLEY_MAX_CHARS` | `3000` | caps a single utterance |
+| `PARLEY_ENV` | — | extra file to read the API key from |
+| `PARLEY_WAKE` | `okay computer` | phrase that starts capture |
+| `PARLEY_SEND` | `send it` | phrase that submits |
+| `PARLEY_MIC` | `0` | avfoundation input device index |
+| `PARLEY_MIC_THRESHOLD` | `500` | raise it in a noisy room |
+| `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | transcribes the dictated message |
+| `PARLEY_STATE` | `~/.claude/speak` | queue, logs, session flags |
 
 ## How it works
 

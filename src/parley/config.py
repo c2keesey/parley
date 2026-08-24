@@ -7,7 +7,7 @@ import os
 import time
 from pathlib import Path
 
-STATE = Path(os.environ.get("CLAUDE_SPEAK_STATE", Path.home() / ".claude" / "speak"))
+STATE = Path(os.environ.get("PARLEY_STATE", Path.home() / ".parley"))
 SESSIONS = STATE / "sessions"
 SPOKEN = STATE / "spoken"
 QUEUE = STATE / "queue"
@@ -23,23 +23,23 @@ PROMPT = (
     "Never use AskUserQuestion; it cannot be answered by voice. Ask in your reply."
 )
 
-MODEL = os.environ.get("CLAUDE_SPEAK_MODEL", "gpt-4o-mini-tts-2025-12-15")
+MODEL = os.environ.get("PARLEY_MODEL", "gpt-4o-mini-tts-2025-12-15")
 FALLBACKS = ["gpt-4o-mini-tts", "tts-1"]
-VOICE = os.environ.get("CLAUDE_SPEAK_VOICE", "fable")
-SPEED = float(os.environ.get("CLAUDE_SPEAK_SPEED", "1.2"))
+VOICE = os.environ.get("PARLEY_VOICE", "fable")
+SPEED = float(os.environ.get("PARLEY_SPEED", "1.2"))
 INSTRUCTIONS = os.environ.get(
-    "CLAUDE_SPEAK_INSTRUCTIONS",
+    "PARLEY_INSTRUCTIONS",
     "Natural and conversational, like a colleague talking you through an update. "
     "Brisk but unhurried. Even tone, no announcer polish.",
 )
-MAX_CHARS = int(os.environ.get("CLAUDE_SPEAK_MAX_CHARS", "3000"))
+MAX_CHARS = int(os.environ.get("PARLEY_MAX_CHARS", "3000"))
 
 VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable",
           "nova", "onyx", "sage", "shimmer", "verse"]
 
 KEY_FILES = [
-    os.environ.get("CLAUDE_SPEAK_ENV", ""),
-    str(Path.home() / ".config" / "claude-speak" / "env"),
+    os.environ.get("PARLEY_ENV", ""),
+    str(Path.home() / ".config" / "parley" / "env"),
 ]
 
 

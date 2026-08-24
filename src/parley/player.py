@@ -13,8 +13,8 @@ import subprocess
 import tempfile
 import time
 
-from claude_speak import config
-from claude_speak.tts import synthesize
+from parley import config
+from parley.tts import synthesize
 
 
 def enqueue(text, voice=None, model=None):
@@ -84,6 +84,7 @@ def drain():
         return False
 
     woke = False
+    spoke = False
     try:
         while True:
             items = _pending()
@@ -93,6 +94,12 @@ def drain():
                 time.sleep(0.3)
                 items = _pending()
                 if not items:
+                    # Marks the end of the whole spoken response, so you know
+                    # the floor is yours again without watching the terminal.
+                    if spoke:
+                        from parley import cues
+
+                        cues.play("done")
                     return True
             item = items[0]
             try:
@@ -112,6 +119,7 @@ def drain():
                     _wake_output()
                     woke = True
                 play(audio)
+                spoke = True
             except Exception as exc:
                 config.log(f"error: {exc}")
     finally:

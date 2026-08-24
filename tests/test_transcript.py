@@ -1,6 +1,6 @@
 import json
 
-from claude_speak.transcript import final_reply
+from parley.transcript import final_reply
 
 
 def write(tmp_path, entries):

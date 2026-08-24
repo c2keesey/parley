@@ -1,6 +1,6 @@
 import pytest
 
-from claude_speak.listen import contains_phrase, rms, strip_phrase
+from parley.listen import contains_phrase, rms, strip_phrase
 
 
 @pytest.mark.parametrize("heard", [
@@ -44,3 +44,21 @@ def test_loud_audio_reads_as_loud():
 
 def test_short_chunk_is_not_an_error():
     assert rms(b"\x00") == 0
+
+
+@pytest.mark.parametrize("heard", ["scrap that", "Scrap that.", "okay scrap that"])
+def test_cancel_phrase_is_recognised(heard):
+    from parley.listen import CANCEL
+    assert contains_phrase(heard, CANCEL)
+
+
+@pytest.mark.parametrize("heard", [
+    "cancel it",
+    "stop",
+    "scrap the old migration and start over",
+    "that scrap heap of a function",
+])
+def test_ordinary_dictation_does_not_cancel(heard):
+    """A discard phrase that fires by accident is worse than none."""
+    from parley.listen import CANCEL
+    assert not contains_phrase(heard, CANCEL)

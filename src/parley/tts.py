@@ -3,7 +3,7 @@ import json
 import urllib.error
 import urllib.request
 
-from claude_speak import config
+from parley import config
 
 ENDPOINT = "https://api.openai.com/v1/audio/speech"
 
@@ -14,7 +14,7 @@ def synthesize(text, voice=None, model=None):
     if not key:
         raise RuntimeError(
             "No OPENAI_API_KEY. Set it in the environment or in "
-            "~/.config/claude-speak/env"
+            "~/.config/parley/env"
         )
     voice = voice or config.VOICE
     model = model or config.MODEL

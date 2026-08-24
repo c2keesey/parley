@@ -22,21 +22,24 @@ import time
 import wave
 from pathlib import Path
 
-from claude_speak import config
+from parley import config, cues
 
 RATE = 16000
 FRAME = 1024
-SPEECH_RMS = int(os.environ.get("CLAUDE_SPEAK_MIC_THRESHOLD", "500"))
+SPEECH_RMS = int(os.environ.get("PARLEY_MIC_THRESHOLD", "500"))
 MIN_SPEECH = 0.35        # seconds of sound before a burst counts as speech
 END_SILENCE = 0.7        # seconds of quiet that ends a burst
 MAX_BURST = 15.0         # hard cap on a single burst
 CAPTURE_TIMEOUT = 120.0  # give up if no send phrase arrives
 
-WAKE = os.environ.get("CLAUDE_SPEAK_WAKE", "okay computer")
-SEND = os.environ.get("CLAUDE_SPEAK_SEND", "send it")
+WAKE = os.environ.get("PARLEY_WAKE", "okay computer")
+SEND = os.environ.get("PARLEY_SEND", "send it")
+# Deliberately not "cancel" or "stop" — those turn up in ordinary dictation
+# about code, and a discard phrase that fires by accident is worse than none.
+CANCEL = os.environ.get("PARLEY_CANCEL", "scrap that")
 
 MODEL_DIR = Path(os.environ.get(
-    "CLAUDE_SPEAK_WHISPER_MODELS", Path.home() / ".cache" / "claude-speak"))
+    "PARLEY_WHISPER_MODELS", Path.home() / ".cache" / "parley"))
 TINY = MODEL_DIR / "ggml-tiny.en.bin"
 TINY_URL = ("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
             "ggml-tiny.en.bin")
@@ -89,6 +92,23 @@ def strip_phrase(text, phrase):
     return text.strip()
 
 
+def strip_leading(text, phrase):
+    """Drop the wake phrase and anything before it.
+
+    You usually keep talking in the same breath as the wake phrase, so the
+    burst that woke us also holds the start of the message. Keeping that audio
+    and trimming the words here is what stops the first sentence going missing.
+    """
+    words, target = normalize(text), normalize(phrase)
+    spoken = text.split()
+    if not target or len(words) < len(target):
+        return text.strip()
+    for i in range(len(words) - len(target) + 1):
+        if words[i:i + len(target)] == target:
+            return " ".join(spoken[i + len(target):]).strip(" ,.")
+    return text.strip()
+
+
 def write_wav(frames, path):
     with wave.open(str(path), "wb") as handle:
         handle.setnchannels(1)
@@ -129,8 +149,8 @@ def transcribe_cloud(frames):
         write_wav(frames, wav)
         audio = wav.read_bytes()
 
-    model = os.environ.get("CLAUDE_SPEAK_STT_MODEL", "gpt-4o-transcribe")
-    boundary = f"----claudespeak{time.time_ns()}"
+    model = os.environ.get("PARLEY_STT_MODEL", "gpt-4o-transcribe")
+    boundary = f"----parley{time.time_ns()}"
     body = b"".join([
         f'--{boundary}\r\nContent-Disposition: form-data; name="model"'
         f"\r\n\r\n{model}\r\n".encode(),
@@ -165,19 +185,8 @@ def speaking():
 
 
 def cue(kind):
-    """A short tone marking wake, send, and cancel."""
-    tone = config.STATE / f"cue-{kind}.mp3"
-    if not tone.exists():
-        ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
-        if not os.path.exists(ffmpeg):
-            return
-        frequency = {"wake": 880, "send": 1320, "cancel": 440}.get(kind, 880)
-        subprocess.run(
-            [ffmpeg, "-f", "lavfi",
-             "-i", f"sine=frequency={frequency}:duration=0.12",
-             "-q:a", "9", "-y", str(tone)], capture_output=True)
-    if tone.exists():
-        subprocess.run(["afplay", str(tone)], capture_output=True)
+    """A short chime marking wake, send, and cancel."""
+    cues.play(kind)
 
 
 def set_target(pane):
@@ -258,6 +267,19 @@ def run(device="0"):
     config.log(f"listening wake={WAKE!r} send={SEND!r} device={device}")
 
     capturing, captured, started = False, [], 0.0
+
+    def finish(frames):
+        cue("send")
+        try:
+            spoken = transcribe_cloud(frames)
+        except Exception as exc:
+            config.log(f"transcription failed: {exc}")
+            return
+        message = strip_phrase(strip_leading(spoken, WAKE), SEND)
+        config.log(f"message {message[:80]!r}")
+        if message:
+            inject(message)
+
     try:
         for burst in bursts(device):
             heard = transcribe_local(burst)
@@ -266,9 +288,22 @@ def run(device="0"):
             config.log(f"heard {heard[:80]!r} capturing={capturing}")
 
             if not capturing:
-                if contains_phrase(heard, WAKE):
-                    capturing, captured, started = True, [], time.time()
-                    cue("wake")
+                if not contains_phrase(heard, WAKE):
+                    continue
+                # Keep this burst: you normally keep talking in the same breath
+                # as the wake phrase, and the words are trimmed from the text
+                # later rather than thrown away with the audio.
+                capturing, captured, started = True, list(burst), time.time()
+                cue("wake")
+                if contains_phrase(heard, SEND):
+                    capturing, captured = False, []
+                    finish(list(burst))
+                continue
+
+            if contains_phrase(heard, CANCEL):
+                capturing, captured = False, []
+                cue("cancel")
+                config.log("discarded")
                 continue
 
             if time.time() - started > CAPTURE_TIMEOUT:
@@ -280,18 +315,9 @@ def run(device="0"):
             captured.extend(burst)
             if not contains_phrase(heard, SEND):
                 continue
-
-            cue("send")
             capturing = False
-            try:
-                message = strip_phrase(transcribe_cloud(captured), SEND)
-            except Exception as exc:
-                config.log(f"transcription failed: {exc}")
-                captured = []
-                continue
-            captured = []
-            if message:
-                inject(message)
+            frames, captured = captured, []
+            finish(frames)
     finally:
         LISTEN_PID.unlink(missing_ok=True)
 

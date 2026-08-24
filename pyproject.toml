@@ -1,26 +1,27 @@
 [project]
-name = "claude-speak"
+name = "parley"
 version = "0.1.0"
-description = "Voice output for Claude Code — hear replies read aloud, and let Claude talk to you mid-task"
+description = "Two-way voice for terminal coding agents — hear replies read aloud, and talk back hands-free"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Chris Keesey" }]
-keywords = ["claude", "claude-code", "tts", "voice", "accessibility"]
+keywords = ["voice", "tts", "stt", "coding-agent", "hands-free", "accessibility"]
 dependencies = []
 
 [project.scripts]
-claude-speak = "claude_speak.cli:main"
+parley = "parley.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/c2keesey/claude-speak"
+Homepage = "https://github.com/c2keesey/parley"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/claude_speak"]
+packages = ["src/parley"]
+artifacts = ["src/parley/skills/**"]
 
 [dependency-groups]
 dev = ["pytest>=8"]

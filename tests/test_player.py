@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from claude_speak import config, player
+from parley import config, player
 
 
 @pytest.fixture(autouse=True)
