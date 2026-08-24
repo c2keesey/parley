@@ -1,4 +1,4 @@
-"""Hands-free input: wake phrase, dictate, send phrase, injected into Claude Code.
+"""Hands-free input: wake phrase, dictate, send phrase, typed into the session.
 
 Three layers, cheapest first, so nothing expensive runs while the room is quiet:
 
@@ -10,8 +10,12 @@ Three layers, cheapest first, so nothing expensive runs while the room is quiet:
 
 Guardrails against the usual over-triggering: a wake phrase is required before
 anything is captured, an explicit send phrase is required before anything is
-submitted, capture expires on its own, and the microphone is ignored entirely
-while Claude is speaking so it can never hear itself.
+submitted, and capture stops itself on silence or a hard time cap so a wedged
+listener can never deliver a colossal transcript.
+
+Speech that overlaps the agent's own voice is kept rather than discarded, but
+only the wake phrase is trusted in it. That is what allows barge-in: say the
+wake phrase over a reply and it stops talking and listens.
 """
 import os
 import shutil
@@ -22,7 +26,7 @@ import time
 import wave
 from pathlib import Path
 
-from parley import config, cues
+from parley import config, cues, player
 
 RATE = 16000
 FRAME = 1024
@@ -30,7 +34,8 @@ SPEECH_RMS = int(os.environ.get("PARLEY_MIC_THRESHOLD", "500"))
 MIN_SPEECH = 0.35        # seconds of sound before a burst counts as speech
 END_SILENCE = 0.7        # seconds of quiet that ends a burst
 MAX_BURST = 15.0         # hard cap on a single burst
-CAPTURE_TIMEOUT = 120.0  # give up if no send phrase arrives
+SILENCE_TIMEOUT = float(os.environ.get("PARLEY_SILENCE_TIMEOUT", "120"))
+HARD_STOP = float(os.environ.get("PARLEY_HARD_STOP", "1200"))
 
 WAKE = os.environ.get("PARLEY_WAKE", "okay computer")
 SEND = os.environ.get("PARLEY_SEND", "send it")
@@ -170,7 +175,7 @@ def transcribe_cloud(frames):
 
 
 def speaking():
-    """True while a player is running, so the microphone never hears Claude."""
+    """True while a player is running, so overlapping speech can be flagged."""
     try:
         pids = config.PIDFILE.read_text().split()
     except OSError:
@@ -202,7 +207,7 @@ def get_target():
 
 
 def inject(text):
-    """Type the message into the Claude Code pane and submit it."""
+    """Type the message into the session's pane and submit it."""
     pane = get_target()
     if not pane or not text:
         return False
@@ -222,7 +227,17 @@ def rms(chunk):
 
 
 def bursts(device="0"):
-    """Yield one list of frames per speech burst. Silence yields nothing."""
+    """Yield (frames, was_playing) per speech burst, plus idle heartbeats.
+
+    Bursts are still collected while the agent is speaking. Dropping them was
+    a real bug: you naturally interrupt, and the wake phrase you said over the
+    reply was silently discarded. The burst is tagged instead, so the caller
+    can require the wake phrase before trusting audio that may contain the
+    agent's own voice.
+
+    A (None, False) heartbeat is yielded about once a second so timeouts can
+    fire during silence, when no burst would ever arrive.
+    """
     ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
     process = subprocess.Popen(
         [ffmpeg, "-hide_banner", "-loglevel", "error",
@@ -230,26 +245,30 @@ def bursts(device="0"):
          "-ac", "1", "-ar", str(RATE), "-f", "s16le", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     frame_seconds = FRAME / RATE
-    buffer, voiced, quiet = [], 0.0, 0.0
+    buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
+    since_beat = 0.0
     try:
         while True:
             chunk = process.stdout.read(FRAME * 2)
             if not chunk:
                 return
-            if speaking():
-                buffer, voiced, quiet = [], 0.0, 0.0
-                continue
+            since_beat += frame_seconds
+            if since_beat >= 1.0:
+                since_beat = 0.0
+                yield None, False
             if rms(chunk) > SPEECH_RMS:
                 buffer.append(chunk)
                 voiced += frame_seconds
                 quiet = 0.0
+                if speaking():
+                    overlapped = True
             elif buffer:
                 buffer.append(chunk)
                 quiet += frame_seconds
                 if quiet >= END_SILENCE or voiced >= MAX_BURST:
                     if voiced >= MIN_SPEECH:
-                        yield buffer
-                    buffer, voiced, quiet = [], 0.0, 0.0
+                        yield buffer, overlapped
+                    buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
     finally:
         process.terminate()
 
@@ -266,7 +285,7 @@ def run(device="0"):
     LISTEN_PID.write_text(str(os.getpid()))
     config.log(f"listening wake={WAKE!r} send={SEND!r} device={device}")
 
-    capturing, captured, started = False, [], 0.0
+    capturing, captured, started, last_heard = False, [], 0.0, 0.0
 
     def finish(frames):
         cue("send")
@@ -281,19 +300,52 @@ def run(device="0"):
             inject(message)
 
     try:
-        for burst in bursts(device):
+        for burst, overlapped in bursts(device):
+            now = time.time()
+
+            if capturing:
+                # Two independent stops. Silence means you walked away or the
+                # send phrase was never recognised. The hard cap exists so a
+                # listener wedged open cannot deliver a colossal transcript.
+                if now - last_heard > SILENCE_TIMEOUT:
+                    capturing, captured = False, []
+                    cue("cancel")
+                    config.log("discarded: silent too long")
+                    continue
+                if now - started > HARD_STOP:
+                    capturing, captured = False, []
+                    cue("cancel")
+                    config.log("discarded: hard stop")
+                    continue
+                if len(captured) * FRAME / RATE > HARD_STOP:
+                    capturing, captured = False, []
+                    cue("cancel")
+                    config.log("discarded: too much audio")
+                    continue
+
+            if burst is None:
+                continue
+
             heard = transcribe_local(burst)
             if not heard:
                 continue
-            config.log(f"heard {heard[:80]!r} capturing={capturing}")
+            config.log(f"heard {heard[:80]!r} capturing={capturing} "
+                       f"overlapped={overlapped}")
 
             if not capturing:
                 if not contains_phrase(heard, WAKE):
                     continue
-                # Keep this burst: you normally keep talking in the same breath
-                # as the wake phrase, and the words are trimmed from the text
-                # later rather than thrown away with the audio.
-                capturing, captured, started = True, list(burst), time.time()
+                # Barge-in: if this landed over the agent's own speech, stop it
+                # talking. Requiring the wake phrase is what makes overlapping
+                # audio safe to act on.
+                if overlapped:
+                    player.stop()
+                    config.log("barged in")
+                # Keep this burst — you normally keep talking in the same breath
+                # as the wake phrase. strip_leading drops everything up to and
+                # including it, which also removes any of the agent's words.
+                capturing, captured = True, list(burst)
+                started = last_heard = now
                 cue("wake")
                 if contains_phrase(heard, SEND):
                     capturing, captured = False, []
@@ -306,12 +358,7 @@ def run(device="0"):
                 config.log("discarded")
                 continue
 
-            if time.time() - started > CAPTURE_TIMEOUT:
-                capturing, captured = False, []
-                cue("cancel")
-                config.log("capture expired")
-                continue
-
+            last_heard = now
             captured.extend(burst)
             if not contains_phrase(heard, SEND):
                 continue

@@ -21,7 +21,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/parley"]
-artifacts = ["src/parley/skills/**"]
+artifacts = ["src/parley/skills/**", "src/parley/sounds/**"]
 
 [dependency-groups]
 dev = ["pytest>=8"]

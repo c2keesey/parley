@@ -24,6 +24,7 @@ import os
 import struct
 import subprocess
 import wave
+from pathlib import Path
 
 from parley import config
 
@@ -43,10 +44,28 @@ PATTERNS = {
 }
 
 
+SOUNDS = Path(__file__).parent / "sounds"
+
+
 def override(name):
     """A sound file to use instead of the generated tone, if one is set."""
     path = os.environ.get(f"PARLEY_CUE_{name.upper()}")
     return path if path and os.path.exists(path) else None
+
+
+def bundled(name):
+    """The shipped sound for this cue.
+
+    These are from Kenney's CC0 interface packs — sounds made by someone who
+    does this for a living, loudness-matched to -14 LUFS so the set is even.
+    Chosen for meaning, not just pleasantness: an interrogative to open, a
+    confirmation to commit, a resolved bell to close, a retreat to discard.
+    The synthesized tones remain as a fallback if the files are missing.
+    """
+    if os.environ.get("PARLEY_SYNTH_CUES"):
+        return None
+    path = SOUNDS / f"{name}.wav"
+    return str(path) if path.exists() else None
 
 
 def _note(frequency, seconds, samples):
@@ -89,7 +108,7 @@ def build(name):
 
 
 def play(name, wait=True):
-    path = override(name) or build(name)
+    path = override(name) or bundled(name) or build(name)
     if not path:
         return
     try:
