@@ -19,7 +19,8 @@ SILENCE = STATE / "silence.mp3"
 
 PROMPT = (
     "Spoken session: your reply is read aloud verbatim. "
-    "Answer in a few sentences of plain speech — no markdown, code, or paths."
+    "Answer in a few sentences of plain speech — no markdown, code, or paths. "
+    "Never use AskUserQuestion; it cannot be answered by voice. Ask in your reply."
 )
 
 MODEL = os.environ.get("CLAUDE_SPEAK_MODEL", "gpt-4o-mini-tts-2025-12-15")

@@ -61,6 +61,54 @@ Turning it on mid-session works without a restart: the confirmation it prints
 is the same instruction the startup hook injects, so it lands in the transcript
 as context.
 
+## Hands-free input
+
+Voice output alone still leaves you typing. `claude-speak listen` closes the
+loop: say the wake phrase, dictate, say the send phrase, and the message is
+typed into your Claude Code pane and submitted.
+
+```sh
+brew install whisper-cpp     # one-time
+claude-speak listen on       # from inside the tmux pane running Claude Code
+claude-speak listen status
+claude-speak listen off
+```
+
+Defaults: say **"okay computer"**, talk, then **"send it"**. A rising tone
+confirms it woke, a higher one confirms it sent, a low one means capture
+expired. Change the phrases with `CLAUDE_SPEAK_WAKE` and `CLAUDE_SPEAK_SEND`.
+
+### Why it doesn't over-trigger, or cost much
+
+Most always-on voice modes either fire constantly or stream your room to a
+paid API. This runs three layers, cheapest first:
+
+1. **An energy gate** over raw microphone frames. No model, no network. Silence
+   costs nothing, which is the whole reason always-on is affordable.
+2. **A tiny local whisper**, run on each burst of speech, looking only for the
+   wake or send phrase. It runs when you talk, not when the clock ticks, and
+   nothing leaves the machine.
+3. **The accurate cloud model**, once, on the message you actually dictated.
+
+So the recurring cost is a fraction of a cent per message you send, and zero
+while you are quiet or merely talking to someone else in the room.
+
+The guardrails are the point. A wake phrase is required before any audio is
+kept, an explicit send phrase is required before anything is submitted, capture
+expires by itself after two minutes, and the microphone is ignored entirely
+while Claude is speaking — so it can never wake itself up on its own voice.
+Pick a wake phrase you would not say while talking *about* Claude.
+
+### What it needs from you
+
+The microphone permission is granted to your **terminal application**, not to
+this tool, and it applies to everything that runs in that terminal afterwards.
+macOS will prompt the first time. Revoke it in System Settings under Privacy
+and Security, Microphone.
+
+Injection uses `tmux send-keys` against the pane you armed it from, so the
+session must be running inside tmux.
+
 ## Configuration
 
 Every knob is an environment variable.
@@ -73,6 +121,11 @@ Every knob is an environment variable.
 | `CLAUDE_SPEAK_INSTRUCTIONS` | conversational | delivery notes for `gpt-*` models |
 | `CLAUDE_SPEAK_MAX_CHARS` | `3000` | caps a single utterance |
 | `CLAUDE_SPEAK_ENV` | — | extra file to read the API key from |
+| `CLAUDE_SPEAK_WAKE` | `okay computer` | phrase that starts capture |
+| `CLAUDE_SPEAK_SEND` | `send it` | phrase that submits |
+| `CLAUDE_SPEAK_MIC` | `0` | avfoundation input device index |
+| `CLAUDE_SPEAK_MIC_THRESHOLD` | `500` | raise it in a noisy room |
+| `CLAUDE_SPEAK_STT_MODEL` | `gpt-4o-transcribe` | transcribes the dictated message |
 | `CLAUDE_SPEAK_STATE` | `~/.claude/speak` | queue, logs, session flags |
 
 ## How it works

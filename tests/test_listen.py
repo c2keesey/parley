@@ -1,0 +1,46 @@
+import pytest
+
+from claude_speak.listen import contains_phrase, rms, strip_phrase
+
+
+@pytest.mark.parametrize("heard", [
+    "okay computer",
+    "Okay, computer.",
+    "um okay computer are you there",
+    "OKAY COMPUTER!",
+])
+def test_wake_phrase_survives_punctuation_and_filler(heard):
+    assert contains_phrase(heard, "okay computer")
+
+
+@pytest.mark.parametrize("heard", [
+    "okay",
+    "computer",
+    "okay the computer is slow",
+    "that computer is okay",
+    "",
+])
+def test_near_misses_do_not_wake(heard):
+    """Over-triggering is the failure mode this whole design exists to avoid."""
+    assert not contains_phrase(heard, "okay computer")
+
+
+def test_send_phrase_is_stripped_from_the_message():
+    assert strip_phrase("run the tests send it", "send it") == "run the tests"
+    assert strip_phrase("Run the tests, send it.", "send it") == "Run the tests"
+
+
+def test_send_phrase_is_only_stripped_from_the_end():
+    assert strip_phrase("send it to staging", "send it") == "send it to staging"
+
+
+def test_silence_reads_as_silence():
+    assert rms(b"\x00\x00" * 512) == 0
+
+
+def test_loud_audio_reads_as_loud():
+    assert rms(b"\xff\x7f" * 512) > 30000
+
+
+def test_short_chunk_is_not_an_error():
+    assert rms(b"\x00") == 0

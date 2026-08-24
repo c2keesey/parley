@@ -1,7 +1,9 @@
 """Command line interface."""
 import argparse
 import os
+import subprocess
 import sys
+import time
 
 from claude_speak import __version__, config, hooks
 from claude_speak.player import detach, drain, enqueue, stop
@@ -57,6 +59,11 @@ def build_parser():
     voices = sub.add_parser("voices", help="audition every voice")
     voices.add_argument("text", nargs="*")
 
+    listen = sub.add_parser("listen", help="hands-free voice input")
+    listen.add_argument("state", nargs="?", choices=["on", "off", "status", "run"])
+    listen.add_argument("--device", default=os.environ.get("CLAUDE_SPEAK_MIC", "0"),
+                        help="avfoundation audio device index")
+
     sub.add_parser("stop", help="drop the queue and stop playing")
     sub.add_parser("install", help="add the hooks to Claude Code settings")
     sub.add_parser("uninstall", help="remove the hooks")
@@ -101,6 +108,47 @@ def main(argv=None):
             hooks.turn_off(session_id)
             stop()
         _report(session_id)
+        return
+
+    if command == "listen":
+        from claude_speak import listen as listener
+
+        state = args.state or "status"
+        if state == "run":
+            listener.run(args.device)
+            return
+        if state == "off":
+            print("listening: stopped" if listener.stop() else "listening: not running")
+            return
+        if state == "status":
+            pid = listener.is_running()
+            target = listener.get_target()
+            print(f"listening: {'on (pid ' + str(pid) + ')' if pid else 'off'}")
+            if pid:
+                print(f"  wake {listener.WAKE!r} -> speak -> {listener.SEND!r}")
+                print(f"  sends to tmux pane {target or '(none)'}")
+            return
+
+        pane = os.environ.get("TMUX_PANE", "")
+        if not pane:
+            print("Not inside tmux — there is no pane to send the message to.",
+                  file=sys.stderr)
+            raise SystemExit(1)
+        if not listener.whisper_bin():
+            print("whisper-cli not found. Install it with: brew install whisper-cpp",
+                  file=sys.stderr)
+            raise SystemExit(1)
+        if not listener.ensure_model():
+            raise SystemExit("could not download the wake-word model")
+        listener.stop()
+        listener.set_target(pane)
+        subprocess.Popen(
+            [sys.argv[0], "listen", "run", "--device", args.device],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True)
+        time.sleep(0.6)
+        print(f"listening: on — say {listener.WAKE!r}, speak, then {listener.SEND!r}")
+        print(f"  sending to tmux pane {pane}")
         return
 
     if command == "stop":
