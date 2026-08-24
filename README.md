@@ -1,22 +1,28 @@
 # parley
 
-Voice output for [Claude Code](https://claude.com/claude-code).
+Two-way voice for terminal coding agents. Works with
+[Claude Code](https://claude.com/claude-code) and
+[Codex](https://developers.openai.com/codex/cli).
 
-Claude Code ships voice *input* — `/voice` gives you push-to-talk dictation.
-There is no voice output. This adds it: replies are read aloud as they land,
-and Claude can talk to you while it is still working.
+Both ship voice *input* of some kind. Neither speaks back. This adds the other
+half: replies are read aloud as they land, the agent can talk to you while it
+is still working, and you can answer it hands-free.
 
-Pair it with dictation and the loop closes. You talk, it talks back, and you
-never have to look at the terminal.
+Nothing in parley is specific to one agent. A session is identified by its
+terminal pane, so anything that runs in a pane and fires a Stop-style hook is
+supported — the two above use the same hooks schema, and `parley install`
+wires up whichever it finds.
 
 ## What it does
 
 - **Reads each reply aloud** as soon as it is finished, in a natural voice.
-- **Tells the model it is being listened to.** A `SessionStart` hook injects one
-  line of context, so Claude writes speakable prose instead of markdown and
+- **Tells the model it is being listened to.** The `voice` skill carries one
+  line of context, so the agent writes speakable prose instead of markdown and
   file paths. Nothing is post-processed — what it writes is what you hear.
-- **Lets Claude speak mid-task.** `parley say "..."` queues a line from
+- **Lets the agent speak mid-task.** `parley say "..."` queues a line from
   anywhere, so a long job can narrate itself instead of going silent.
+- **Listens back.** Say a wake phrase, talk, say a send phrase, and the message
+  is typed into the session. Layered so always-on listening stays cheap.
 - **Never overlaps.** Everything goes through one queue drained by a single
   player. Replies, status updates and voice samples all take turns.
 - **Per-session.** One session can speak while the rest stay quiet.
@@ -25,15 +31,27 @@ never have to look at the terminal.
 
 ```sh
 uv tool install parley      # or: pipx install parley
-parley install              # wires the hooks into ~/.claude/settings.json
+parley install              # wires up every agent it finds
 ```
 
-`parley install` is idempotent and leaves any hooks you already have
-alone. It backs up `settings.json` before writing. To undo it:
+`parley install` writes a `Stop` hook and the `voice` skill into each agent
+present on the machine:
+
+| Agent | Hook | Skill |
+|---|---|---|
+| Claude Code | `~/.claude/settings.json` | `~/.claude/skills/voice/` |
+| Codex | `~/.codex/hooks.json` | `~/.codex/skills/voice/` |
+
+It is idempotent, leaves any hooks you already have alone, and backs up the
+settings file before writing. Pass `--harness claude-code` or `--harness codex`
+to target one. To undo it:
 
 ```sh
-parley uninstall
+parley uninstall            # optionally --harness <name>
 ```
+
+With the skill installed you can just say "voice on" or "voice off" to the
+agent, in either tool, instead of running the command yourself.
 
 You need an OpenAI API key, either in `OPENAI_API_KEY` or in a file at
 `~/.config/parley/env` containing `OPENAI_API_KEY=sk-...`.
@@ -65,11 +83,11 @@ as context.
 
 Voice output alone still leaves you typing. `parley listen` closes the
 loop: say the wake phrase, dictate, say the send phrase, and the message is
-typed into your Claude Code pane and submitted.
+typed into your agent's pane and submitted.
 
 ```sh
 brew install whisper-cpp     # one-time
-parley listen on       # from inside the tmux pane running Claude Code
+parley listen on       # from inside the tmux pane running the agent
 parley listen status
 parley listen off
 ```
@@ -106,8 +124,9 @@ this tool, and it applies to everything that runs in that terminal afterwards.
 macOS will prompt the first time. Revoke it in System Settings under Privacy
 and Security, Microphone.
 
-Injection uses `tmux send-keys` against the pane you armed it from, so the
-session must be running inside tmux.
+Input is typed with `tmux send-keys` against the pane you armed it from, so
+the session must be running inside tmux. That is also why this is agent
+agnostic: it types into the session the same way you would.
 
 ## Configuration
 
@@ -126,21 +145,32 @@ Every knob is an environment variable.
 | `PARLEY_MIC` | `0` | avfoundation input device index |
 | `PARLEY_MIC_THRESHOLD` | `500` | raise it in a noisy room |
 | `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | transcribes the dictated message |
-| `PARLEY_STATE` | `~/.claude/speak` | queue, logs, session flags |
+| `PARLEY_STATE` | `~/.parley` | queue, logs, session flags |
 
 ## How it works
 
-Two hooks and a queue.
+A skill, a hook, and a queue.
 
-`SessionStart` injects one line telling the model its replies are spoken.
-That is the whole prompt — no summarizer, no markdown stripper. Asking for
-speakable prose up front beats repairing prose after the fact.
+The **skill** carries one line telling the model its replies are spoken. It is
+a skill rather than a session-start hook because voice gets switched on and off
+mid-session, and only the sessions that asked for it should carry the
+instruction. That line is the whole prompt — no summarizer, no markdown
+stripper. Asking for speakable prose up front beats repairing prose afterwards.
 
-`Stop` fires when a reply finishes. Finding *which* reply is subtler than it
-looks: the hook can fire before the reply is flushed to the transcript, and the
-previous turn's reply looks equally new. So the reply is anchored to the last
-real user message — tool results are recorded as user entries and are excluded
-— and the transcript is allowed to settle before anything is read.
+The **hook** fires when a reply finishes. Agents report that reply differently:
+Codex hands over the text directly, Claude Code hands over a path to a
+transcript. Both shapes are read, so one handler serves either.
+
+Finding *which* reply is subtler than it looks in the transcript case. The hook
+can fire before the reply is flushed, and the previous turn's reply looks
+equally new. So the reply is anchored to the last real user message — tool
+results are recorded as user entries and are excluded — and the transcript is
+allowed to settle before anything is read.
+
+A session is keyed by its **terminal pane**, not by any agent's session id. The
+pane is what voice actually addresses: it is where the reply is spoken and
+where a dictated message is typed back. It also means this works under an agent
+that exposes no session id at all.
 
 Utterances become files in a spool directory named by nanosecond timestamp.
 Any process may enqueue; exactly one drains, chosen by an exclusive `flock`.
@@ -150,7 +180,7 @@ Playback starts with six-tenths of a second of silence, because Bluetooth
 headphones take about that long to switch profiles and will otherwise swallow
 your first few words.
 
-`~/.claude/speak/speak.log` records what was spoken, in which voice, and how
+`~/.parley/speak.log` records what was spoken, in which voice, and how
 long synthesis took.
 
 ## License
