@@ -1,0 +1,26 @@
+[project]
+name = "claude-speak"
+version = "0.1.0"
+description = "Voice output for Claude Code — hear replies read aloud, and let Claude talk to you mid-task"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Chris Keesey" }]
+keywords = ["claude", "claude-code", "tts", "voice", "accessibility"]
+dependencies = []
+
+[project.scripts]
+claude-speak = "claude_speak.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/c2keesey/claude-speak"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claude_speak"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
