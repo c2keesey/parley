@@ -14,7 +14,9 @@ works under a harness that exposes no session id at all.
 import hashlib
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -60,6 +62,47 @@ def session_keys(payload=None):
             if payload.get(key):
                 keys.append("id-" + _clean(payload[key]))
     return keys or ["default"]
+
+
+def session_label(payload=None):
+    """A short, speakable name for the session that produced a reply."""
+    override = os.environ.get("PARLEY_SESSION_NAME", "").strip()
+    if override:
+        return override
+
+    payload = payload or {}
+    for key in ("session_name", "sessionName", "title"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    pane = os.environ.get("TMUX_PANE")
+    if pane:
+        try:
+            result = subprocess.run(
+                ["tmux", "display-message", "-p", "-t", pane, "#S"],
+                capture_output=True, text=True, timeout=1, check=False,
+            )
+            name = result.stdout.strip()
+            if name:
+                # Agent Deck's tmux identity is agentdeck_<title>_<8hex>.
+                # Keep the title, which is the name the user sees in the deck.
+                if name.startswith("agentdeck_"):
+                    name = name[len("agentdeck_"):]
+                    name = re.sub(r"_[0-9a-fA-F]{8}$", "", name)
+                return name.replace("_", " ")
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    cwd = payload.get("cwd") or os.environ.get("PWD", "")
+    if cwd:
+        return Path(str(cwd)).name
+    return "unknown"
+
+
+def label_reply(text, payload=None):
+    """Make concurrent spoken sessions distinguishable without rewriting."""
+    return f"Session {session_label(payload)}. {text}"
 
 
 def is_on(keys):
@@ -130,7 +173,7 @@ def speak_reply(marker_key, payload):
 
     seen.parent.mkdir(parents=True, exist_ok=True)
     seen.write_text(reply_id)
-    enqueue(text)
+    enqueue(label_reply(text, payload))
     drain()
 
 

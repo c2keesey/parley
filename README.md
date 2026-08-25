@@ -25,6 +25,8 @@ wires up whichever it finds.
   is typed into the session. Layered so always-on listening stays cheap.
 - **Never overlaps.** Everything goes through one queue drained by a single
   player. Replies, status updates and voice samples all take turns.
+- **Names the speaker.** Every automatic reply starts with its session name,
+  so several voice-enabled agents can share one audio queue without ambiguity.
 - **Per-session.** One session can speak while the rest stay quiet.
 
 ## Install
@@ -139,6 +141,7 @@ Every knob is an environment variable.
 | `PARLEY_SPEED` | `1.2` | |
 | `PARLEY_INSTRUCTIONS` | conversational | delivery notes for `gpt-*` models |
 | `PARLEY_MAX_CHARS` | `3000` | caps a single utterance |
+| `PARLEY_SESSION_NAME` | tmux session name | spoken before every automatic reply |
 | `PARLEY_ENV` | — | extra file to read the API key from |
 | `PARLEY_WAKE` | `okay computer` | phrase that starts capture |
 | `PARLEY_SEND` | `send it` | phrase that submits |

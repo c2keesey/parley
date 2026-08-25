@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +31,27 @@ def test_falls_back_to_a_harness_session_id(monkeypatch):
 
 def test_payload_identity_is_accepted_when_the_environment_is_bare():
     assert hooks.session_keys({"session_id": "s1"}) == ["id-s1"]
+
+
+def test_agent_deck_session_name_becomes_a_spoken_label(monkeypatch):
+    monkeypatch.setenv("TMUX_PANE", "%42")
+    monkeypatch.setattr(hooks.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(stdout="agentdeck_windy-falcon_2ae0c860\n"))
+    assert hooks.session_label() == "windy-falcon"
+    assert hooks.label_reply("Tests are green.") == (
+        "Session windy-falcon. Tests are green.")
+
+
+def test_explicit_session_name_wins(monkeypatch):
+    monkeypatch.setenv("PARLEY_SESSION_NAME", "release captain")
+    assert hooks.session_label({"title": "ignored"}) == "release captain"
+
+
+def test_plain_tmux_session_name_is_preserved(monkeypatch):
+    monkeypatch.setenv("TMUX_PANE", "%42")
+    monkeypatch.setattr(hooks.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(stdout="my_project\n"))
+    assert hooks.session_label() == "my project"
 
 
 def test_matching_any_identity_counts(monkeypatch):
@@ -120,6 +142,19 @@ def test_hook_speaks_when_the_session_is_on(monkeypatch):
     hooks.handle(argv=[json.dumps(
         {"session_id": "s1", "last-assistant-message": "hello"})])
     assert len(spoke) == 1
+
+
+def test_automatic_reply_is_enqueued_with_its_session_name(monkeypatch):
+    queued = []
+    monkeypatch.setattr(hooks, "reply_from", lambda payload: ("reply-1", "hello"))
+    monkeypatch.setattr(hooks, "session_label", lambda payload: "windy-falcon")
+    monkeypatch.setattr(hooks, "enqueue", queued.append)
+    monkeypatch.setattr(hooks, "drain", lambda: None)
+    monkeypatch.setattr(hooks.time, "sleep", lambda seconds: None)
+
+    hooks.speak_reply("pane-42", {})
+
+    assert queued == ["Session windy-falcon. hello"]
 
 
 def test_malformed_payload_is_survivable(monkeypatch):

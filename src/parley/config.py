@@ -18,7 +18,7 @@ LOG = STATE / "speak.log"
 SILENCE = STATE / "silence.mp3"
 
 PROMPT = (
-    "Spoken session: your reply is read aloud verbatim. "
+    "Spoken session: Parley announces this session's name, then reads your reply aloud. "
     "Answer in a few sentences of plain speech — no markdown, code, or paths. "
     "Never use AskUserQuestion; it cannot be answered by voice. Ask in your reply."
 )
