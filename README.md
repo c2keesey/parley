@@ -103,16 +103,18 @@ Voice output alone still leaves you typing. `parley listen` closes the
 loop: say the wake phrase, dictate, say the send phrase, and the message is
 typed into your agent's pane and submitted.
 
-While listening is active, every tmux session shows a high-contrast persistent
-`🎙 PARLEY LISTENING → <target>` badge. The badge checks the listener process
-on every status refresh, disappears if it stops or crashes, and follows the
-pane that will receive dictated messages.
+While listening is active, every tmux session shows a persistent state badge:
+`🎙 PARLEY READY` while the wake detector is armed, `🔴 PARLEY LISTENING` while
+capturing dictation, `⏳ PARLEY SENDING` during transcription and submission,
+and `🔊 PARLEY SPEAKING · MIC READY` during spoken output. It disappears if the
+listener stops or crashes and always names the pane receiving dictated messages.
 
 ```sh
 brew install whisper-cpp     # one-time
 parley listen on       # from inside the tmux pane running the agent
 parley listen status
 parley listen off
+parley enroll          # optional, personalized local trigger matching
 ```
 
 Defaults: say **"okay computer"**, talk, then **"send it"**. A quiet low tone
@@ -127,6 +129,14 @@ The local recognizer is biased toward these control phrases, and the audio gate
 is tuned to retain fast command-sized utterances. `send it` ends capture only
 when it is trailing, so the same words inside message content are preserved;
 ordinary dictation such as `Sunday` never submits a message.
+
+If trigger recognition is unreliable, run `parley enroll`. Parley guides you
+through several natural repetitions of each control phrase and trains a local
+speaker-personalized acoustic profile. Raw recordings remain in memory; only
+normalized feature templates are saved under `~/.parley/triggers`, with private
+permissions. Personalized matching runs beside tiny Whisper, tolerates changes
+in pace, and considers send/cancel controls only on command-sized utterances so
+mentions inside ordinary dictation remain content.
 
 If you say **"okay computer"** again while dictating, the wake tone plays again
 as an audible confirmation that capture is still active. Parley keeps
@@ -164,9 +174,10 @@ paid API. This runs three layers, cheapest first:
 
 1. **An energy gate** over raw microphone frames. No model, no network. Silence
    costs nothing, which is the whole reason always-on is affordable.
-2. **A tiny local whisper**, run on each burst of speech, looking only for the
-   wake or send phrase. It runs when you talk, not when the clock ticks, and
-   nothing leaves the machine.
+2. **Local trigger detection.** A tiny Whisper recognizes control phrases and,
+   after optional enrollment, a speaker-personalized acoustic matcher provides
+   a second path when transcription gets the words wrong. Neither leaves the
+   machine.
 3. **The accurate cloud model**, once, on the message you actually dictated.
 
 So the recurring cost is a fraction of a cent per message you send, and zero
@@ -212,6 +223,7 @@ Every knob is an environment variable.
 | `PARLEY_STOP_TALKING` | `stop talking` | local interrupt used after the wake phrase during playback |
 | `PARLEY_MIC` | `0` | avfoundation input device index |
 | `PARLEY_MIC_THRESHOLD` | `500` | raise it in a noisy room |
+| `PARLEY_MIN_SPEECH` | `0.10` | minimum voiced seconds retained for trigger detection |
 | `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | transcribes the dictated message |
 | `PARLEY_STATE` | `~/.parley` | queue, logs, session flags |
 

@@ -1,13 +1,13 @@
 [project]
 name = "parley"
-version = "0.4.7"
+version = "0.5.0"
 description = "Two-way voice for terminal coding agents — hear replies read aloud, and talk back hands-free"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Chris Keesey" }]
 keywords = ["voice", "tts", "stt", "coding-agent", "hands-free", "accessibility"]
-dependencies = []
+dependencies = ["numpy>=2"]
 
 [project.scripts]
 parley = "parley.cli:main"

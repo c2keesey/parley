@@ -19,8 +19,25 @@ def test_indicator_is_blank_when_listener_is_not_alive(monkeypatch):
 def test_indicator_names_the_dictation_target(monkeypatch):
     monkeypatch.setattr(listen, "is_running", lambda: 123)
     monkeypatch.setattr(listen, "get_target", lambda: "%42")
+    monkeypatch.setattr(listen, "listener_state", lambda: "ready")
+    monkeypatch.setattr(listen, "speaking", lambda: False)
     monkeypatch.setattr(indicator, "_session_label", lambda pane: "windy-falcon")
-    assert indicator.text() == " 🎙 PARLEY LISTENING → windy-falcon "
+    assert indicator.text() == " 🎙 PARLEY READY → windy-falcon "
+
+
+def test_indicator_distinguishes_capture_send_and_speech(monkeypatch):
+    monkeypatch.setattr(listen, "is_running", lambda: 123)
+    monkeypatch.setattr(listen, "get_target", lambda: "%42")
+    monkeypatch.setattr(indicator, "_session_label", lambda pane: "windy-falcon")
+    monkeypatch.setattr(listen, "speaking", lambda: False)
+
+    monkeypatch.setattr(listen, "listener_state", lambda: "capturing")
+    assert indicator.text() == " 🔴 PARLEY LISTENING → windy-falcon "
+    monkeypatch.setattr(listen, "listener_state", lambda: "sending")
+    assert indicator.text() == " ⏳ PARLEY SENDING → windy-falcon "
+    monkeypatch.setattr(listen, "listener_state", lambda: "ready")
+    monkeypatch.setattr(listen, "speaking", lambda: True)
+    assert indicator.text() == " 🔊 PARLEY SPEAKING · MIC READY → windy-falcon "
 
 
 def test_agent_deck_tmux_identity_becomes_a_readable_label(monkeypatch):

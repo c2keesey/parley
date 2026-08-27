@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from parley import config, player
+from parley import config, indicator, player
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +16,7 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "MIC_TURN", tmp_path / "microphone-turn.pid")
     monkeypatch.setattr(config, "LOG", tmp_path / "speak.log")
     monkeypatch.setattr(config, "INTERRUPT", tmp_path / "interrupt")
+    monkeypatch.setattr(indicator, "refresh", lambda: None)
 
 
 @pytest.fixture

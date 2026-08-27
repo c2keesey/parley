@@ -29,12 +29,12 @@ import time
 import wave
 from pathlib import Path
 
-from parley import config, cues, indicator, player
+from parley import config, cues, indicator, player, triggers
 
 RATE = 16000
 FRAME = 1024
 SPEECH_RMS = int(os.environ.get("PARLEY_MIC_THRESHOLD", "500"))
-MIN_SPEECH = float(os.environ.get("PARLEY_MIN_SPEECH", "0.16"))
+MIN_SPEECH = float(os.environ.get("PARLEY_MIN_SPEECH", "0.10"))
 END_SILENCE = 0.7        # seconds of quiet that ends a burst
 INTERRUPT_SILENCE = 0.25 # quicker burst completion while speech is playing
 MAX_BURST = 15.0         # hard cap on a single burst
@@ -371,6 +371,22 @@ def inject(text):
     return True
 
 
+def listener_state():
+    """Current listener state; an absent or invalid marker means ready."""
+    try:
+        state = config.LISTENER_STATE.read_text().strip()
+    except OSError:
+        return "ready"
+    return state if state in {"ready", "capturing", "sending"} else "ready"
+
+
+def set_listener_state(state):
+    """Persist and immediately display a listener state transition."""
+    config.STATE.mkdir(parents=True, exist_ok=True)
+    config.LISTENER_STATE.write_text(state)
+    indicator.refresh()
+
+
 def rms(chunk):
     usable = len(chunk) // 2 * 2
     if usable < 2:
@@ -422,7 +438,7 @@ def bursts(device="0"):
                 if quiet >= end_silence or voiced >= MAX_BURST:
                     if voiced >= MIN_SPEECH:
                         yield buffer, overlapped
-                    elif voiced >= 0.10:
+                    elif voiced >= 0.05:
                         config.log(
                             f"gate ignored short audio voiced={voiced:.2f}s")
                     buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
@@ -440,13 +456,18 @@ def run(device="0"):
 
     config.STATE.mkdir(parents=True, exist_ok=True)
     LISTEN_PID.write_text(str(os.getpid()))
+    set_listener_state("ready")
     config.log(f"listening wake={WAKE!r} send={SEND!r} device={device}")
+    personalized_active = triggers.enrolled()
+    if personalized_active:
+        config.log("personalized triggers active")
     indicator.ensure()
 
     capturing, captured, started, last_heard = False, [], 0.0, 0.0
     last_indicator = time.time()
 
     def finish(frames):
+        set_listener_state("sending")
         cue("send")
         try:
             try:
@@ -460,6 +481,7 @@ def run(device="0"):
                 inject(message)
         finally:
             player.resume()
+            set_listener_state("ready")
 
     try:
         for burst, overlapped in bursts(device):
@@ -478,18 +500,21 @@ def run(device="0"):
                 # listener wedged open cannot deliver a colossal transcript.
                 if now - last_heard > SILENCE_TIMEOUT:
                     capturing, captured = False, []
+                    set_listener_state("ready")
                     cue("cancel")
                     config.log("discarded: silent too long")
                     player.resume()
                     continue
                 if now - started > HARD_STOP:
                     capturing, captured = False, []
+                    set_listener_state("ready")
                     cue("cancel")
                     config.log("discarded: hard stop")
                     player.resume()
                     continue
                 if len(captured) * FRAME / RATE > HARD_STOP:
                     capturing, captured = False, []
+                    set_listener_state("ready")
                     cue("cancel")
                     config.log("discarded: too much audio")
                     player.resume()
@@ -498,24 +523,46 @@ def run(device="0"):
             if burst is None:
                 continue
 
+            allowed = ("wake", "send", "cancel", "stop") if capturing else (
+                "wake", "stop")
+            personalized = None
+            if personalized_active:
+                personalized, score, threshold = triggers.match(burst, allowed)
+                if personalized:
+                    config.log(
+                        f"personalized trigger={personalized} score={score:.3f} "
+                        f"threshold={threshold:.3f}")
+
+            voiced_seconds = sum(
+                rms(frame) > SPEECH_RMS for frame in burst) * FRAME / RATE
+            if (personalized_active and voiced_seconds < 0.16
+                    and not personalized):
+                config.log(
+                    f"personalized short candidate rejected "
+                    f"voiced={voiced_seconds:.2f}s")
+                continue
+
             heard = transcribe_local(burst)
-            if not heard:
+            if not heard and not personalized:
                 config.log(f"local transcription empty frames={len(burst)}")
                 continue
-            config.log(f"heard {heard[:80]!r} capturing={capturing} "
-                       f"overlapped={overlapped}")
+            if heard:
+                config.log(f"heard {heard[:80]!r} capturing={capturing} "
+                           f"overlapped={overlapped}")
 
             # This is a voice-control command, not dictation. It is handled
             # before capture state, never reaches cloud transcription, emits
             # no confirmation sound, and cannot become a chat message.
-            if is_stop_talking(heard, overlapped or speaking()):
+            if (is_stop_talking(heard, overlapped or speaking())
+                    or (personalized == "stop" and (overlapped or speaking()))):
                 player.stop()
                 capturing, captured = False, []
+                set_listener_state("ready")
                 config.log("voice-control: stopped talking")
                 continue
 
             if not capturing:
-                if not contains_phrase(heard, WAKE):
+                if personalized != "wake" and not contains_wake(heard):
                     continue
                 # Barge-in pauses rather than discards. The microphone marker
                 # is also set when nothing is speaking yet, making dictation an
@@ -531,6 +578,7 @@ def run(device="0"):
                 # as the wake phrase. strip_leading drops everything up to and
                 # including it, which also removes any of the agent's words.
                 capturing, captured = True, list(burst)
+                set_listener_state("capturing")
                 started = last_heard = now
                 cue("wake")
                 if is_send(heard):
@@ -538,20 +586,21 @@ def run(device="0"):
                     finish(list(burst))
                 continue
 
-            if is_cancel(heard):
+            if personalized == "cancel" or is_cancel(heard):
                 capturing, captured = False, []
+                set_listener_state("ready")
                 cue("cancel")
                 config.log("discarded")
                 player.resume()
                 continue
 
-            if contains_wake(heard):
+            if personalized == "wake" or contains_wake(heard):
                 cue("wake")
                 config.log("wake repeated: capture still active")
 
             last_heard = now
             captured.extend(burst)
-            if not is_send(heard):
+            if personalized != "send" and not is_send(heard):
                 continue
             capturing = False
             frames, captured = captured, []
@@ -560,6 +609,7 @@ def run(device="0"):
         if capturing:
             player.resume()
         LISTEN_PID.unlink(missing_ok=True)
+        config.LISTENER_STATE.unlink(missing_ok=True)
 
 
 def is_running():
@@ -579,5 +629,7 @@ def stop():
         except OSError:
             pass
     LISTEN_PID.unlink(missing_ok=True)
+    config.LISTENER_STATE.unlink(missing_ok=True)
+    indicator.refresh()
     player.resume()
     return bool(pid)

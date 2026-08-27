@@ -34,6 +34,9 @@ def enqueue(text, voice=None, model=None):
     tmp = config.QUEUE / (name + ".tmp")
     tmp.write_text(json.dumps(item))
     tmp.rename(config.QUEUE / name)
+    from parley import indicator
+
+    indicator.refresh()
     return True
 
 
@@ -88,6 +91,9 @@ def play(audio, interrupt=None):
                 config.SPEECH_PID.unlink(missing_ok=True)
         except OSError:
             pass
+        from parley import indicator
+
+        indicator.refresh()
         try:
             os.unlink(path)
         except OSError:

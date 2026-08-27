@@ -50,6 +50,11 @@ def build_parser():
     listen.add_argument("--device", default=os.environ.get("PARLEY_MIC", "0"),
                         help="avfoundation audio device index")
 
+    enroll = sub.add_parser(
+        "enroll", help="record a local personalized trigger profile")
+    enroll.add_argument("--device", default=os.environ.get("PARLEY_MIC", "0"),
+                        help="avfoundation audio device index")
+
     sub.add_parser("stop", help="drop the queue and stop playing")
     sub.add_parser("cues", help="regenerate the notification tones")
 
@@ -134,6 +139,10 @@ def main(argv=None):
             pid = listener.is_running()
             print(f"listening: {'on (pid ' + str(pid) + ')' if pid else 'off'}")
             if pid:
+                print(f"  state {listener.listener_state()}")
+                print(
+                    f"  personalized triggers "
+                    f"{'active' if listener.triggers.enrolled() else 'not enrolled'}")
                 print(f"  wake {listener.WAKE!r} -> speak -> {listener.SEND!r}")
                 print(f"  sends to pane {listener.get_target() or '(none)'}")
             return
@@ -158,6 +167,30 @@ def main(argv=None):
         time.sleep(0.6)
         print(f"listening: on — say {listener.WAKE!r}, speak, then {listener.SEND!r}")
         print(f"  typing into pane {pane}")
+        return
+
+    if command == "enroll":
+        from parley import listen as listener, triggers
+
+        was_running = bool(listener.is_running())
+        pane = listener.get_target()
+        if was_running:
+            listener.stop()
+            time.sleep(0.3)
+        print("Raw recordings stay in memory; only local acoustic features are saved.")
+        try:
+            metadata = triggers.save(triggers.collect(args.device))
+        finally:
+            if was_running and pane:
+                listener.set_target(pane)
+                subprocess.Popen(
+                    [sys.argv[0], "listen", "run", "--device", args.device],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, start_new_session=True)
+                time.sleep(0.6)
+        print("Personalized triggers: active")
+        for name, threshold in metadata["thresholds"].items():
+            print(f"  {name}: threshold {threshold:.3f}")
         return
 
     if command == "stop":

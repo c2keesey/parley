@@ -14,10 +14,14 @@ from parley.listen import (
 
 
 @pytest.fixture(autouse=True)
-def isolate_microphone_turn(monkeypatch):
+def isolate_microphone_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(listen.player, "pause", lambda: False)
     monkeypatch.setattr(listen.player, "resume", lambda: False)
     monkeypatch.setattr(listen.player, "microphone_active", lambda: False)
+    monkeypatch.setattr(listen.config, "LISTENER_STATE", tmp_path / "listener.state")
+    monkeypatch.setattr(listen.config, "TRIGGERS", tmp_path / "triggers")
+    listen.triggers.load.cache_clear()
+    monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
 
 
 @pytest.mark.parametrize("heard", [
@@ -126,6 +130,17 @@ def test_short_chunk_is_not_an_error():
     assert rms(b"\x00") == 0
 
 
+def test_listener_state_is_persisted_and_refreshed(tmp_path, monkeypatch):
+    refreshed = []
+    monkeypatch.setattr(listen.config, "LISTENER_STATE", tmp_path / "state")
+    monkeypatch.setattr(listen.indicator, "refresh", lambda: refreshed.append(True))
+
+    listen.set_listener_state("capturing")
+
+    assert listen.listener_state() == "capturing"
+    assert refreshed == [True]
+
+
 class FakeAudioStream:
     def __init__(self, chunks):
         self.chunks = iter(chunks)
@@ -150,7 +165,7 @@ def audio_chunks(voiced_frames):
 
 
 def test_fast_command_sized_burst_reaches_local_recognition(monkeypatch):
-    process = FakeAudioProcess(audio_chunks(4))
+    process = FakeAudioProcess(audio_chunks(2))
     monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(listen, "speaking", lambda: False)
 
@@ -160,7 +175,7 @@ def test_fast_command_sized_burst_reaches_local_recognition(monkeypatch):
 
 
 def test_click_sized_burst_remains_below_speech_gate(monkeypatch):
-    process = FakeAudioProcess(audio_chunks(2))
+    process = FakeAudioProcess(audio_chunks(1))
     logs = []
     monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(listen, "speaking", lambda: False)
@@ -169,7 +184,7 @@ def test_click_sized_burst_remains_below_speech_gate(monkeypatch):
     actual = [burst for burst, _ in listen.bursts() if burst is not None]
 
     assert actual == []
-    assert logs == ["gate ignored short audio voiced=0.13s"]
+    assert logs == ["gate ignored short audio voiced=0.06s"]
 
 
 @pytest.mark.parametrize("heard", [
@@ -415,6 +430,45 @@ def test_send_it_inside_content_does_not_end_capture_or_get_removed(
         "so this content must still be captured",
     ]
     assert actions == ["pause", "wake", "send", "resume"]
+
+
+def test_personalized_audio_recovers_wake_and_send_asr_misses(
+        tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"wake"], False),
+        ([b"content"], False),
+        ([b"send"], False),
+    ]))
+    heard = iter([
+        "okay something is bugging out",
+        "the send it command is unreliable",
+        "Sunday.",
+    ])
+    matches = iter([
+        ("wake", 0.1, 0.3),
+        (None, 0.8, 0.3),
+        ("send", 0.1, 0.3),
+    ])
+    monkeypatch.setattr(listen.triggers, "enrolled", lambda: True)
+    monkeypatch.setattr(listen.triggers, "match", lambda frames, allowed: next(matches))
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+    monkeypatch.setattr(
+        listen, "transcribe_cloud",
+        lambda frames: (
+            "okay computer the send it command is unreliable send it"),
+    )
+    monkeypatch.setattr(listen, "inject", sent.append)
+    monkeypatch.setattr(listen, "cue", lambda kind: None)
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert sent == ["the send it command is unreliable"]
 
 
 def test_local_whisper_is_biased_toward_control_phrases(tmp_path, monkeypatch):

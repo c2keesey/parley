@@ -26,14 +26,28 @@ def _session_label(pane):
 
 
 def text():
-    """Badge content, or nothing when the listener is not genuinely alive."""
+    """Badge content, including the listener's current operational state."""
     from parley import listen
 
     if not listen.is_running():
         return ""
     label = _session_label(listen.get_target())
     target = f" → {label}" if label else ""
-    return f" 🎙 PARLEY LISTENING{target} "
+    state = listen.listener_state()
+    if state == "capturing":
+        status = "🔴 PARLEY LISTENING"
+    elif state == "sending":
+        status = "⏳ PARLEY SENDING"
+    elif listen.speaking():
+        status = "🔊 PARLEY SPEAKING · MIC READY"
+    else:
+        status = "🎙 PARLEY READY"
+    return f" {status}{target} "
+
+
+def refresh():
+    """Refresh the badge immediately after a state transition."""
+    _run(["tmux", "refresh-client", "-S"])
 
 
 def ensure():

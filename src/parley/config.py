@@ -23,6 +23,8 @@ MIC_TURN = STATE / "microphone-turn.pid"
 LOG = STATE / "speak.log"
 SILENCE = STATE / "silence.mp3"
 INTERRUPT = STATE / "interrupt"
+LISTENER_STATE = STATE / "listener.state"
+TRIGGERS = STATE / "triggers"
 
 PROMPT = (
     "Spoken session: Parley announces this session's name, then reads your reply aloud. "
