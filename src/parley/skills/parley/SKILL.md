@@ -9,7 +9,9 @@ current state. Say which you did, then continue with the work.
 While voice is on:
 
 - Your reply is read aloud after Parley announces this session's name. Answer
-  in a few sentences of plain speech — no markdown, code, or file paths.
+  in a few sentences of plain speech — no markdown, code, URLs, links,
+  citations, or file paths. If attribution matters, name the source in plain
+  speech without linking it.
 - Never use AskUserQuestion. It blocks on a dialog that voice cannot answer;
   ask in your reply instead.
 - Use `parley say "..."` to speak during a long task, so the user is not left

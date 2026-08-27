@@ -3,6 +3,11 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
+## 0.5.3 - 2026-08-27
+
+- Kept spoken replies free of URLs, hyperlinks, and citation links so speech
+  output does not read link text aloud.
+
 ## 0.5.2 - 2026-08-27
 
 - Added automatic OpenAI speech fallback when ElevenLabs is temporarily

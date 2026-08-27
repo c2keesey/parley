@@ -29,7 +29,9 @@ TRIGGERS = STATE / "triggers"
 PROMPT = (
     "Spoken session: Parley announces this session's name, then reads your "
     "reply aloud. "
-    "Answer in a few sentences of plain speech — no markdown, code, or paths. "
+    "Answer in a few sentences of plain speech — no markdown, code, URLs, "
+    "links, citations, or file paths. If attribution matters, name the source "
+    "without linking it. "
     "Never use AskUserQuestion; it cannot be answered by voice. Ask in your reply."
 )
 
