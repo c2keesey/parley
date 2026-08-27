@@ -3,34 +3,31 @@
 [![CI](https://github.com/c2keesey/parley/actions/workflows/ci.yml/badge.svg)](https://github.com/c2keesey/parley/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Two-way voice for terminal coding agents. Works with
-[Claude Code](https://claude.com/claude-code) and
-[Codex](https://developers.openai.com/codex/cli).
+## Your coding agent, out loud
 
-Both ship voice *input* of some kind. Neither speaks back. This adds the other
-half: replies are read aloud as they land, the agent can talk to you while it
-is still working, and you can answer it hands-free.
+Parley turns terminal coding agents into collaborators you can actually talk
+with. Give an agent a task, lean back or walk away, and hear its response when
+it is ready. Say “okay computer” to reply, then “send it” when you are done.
+No keyboard required.
 
-Nothing in parley is specific to one agent. A session is identified by its
-terminal pane, so anything that runs in a pane and fires a Stop-style hook is
-supported — the two above use the same hooks schema, and `parley install`
-wires up whichever it finds.
+It works with [Claude Code](https://claude.com/claude-code) and
+[Codex](https://developers.openai.com/codex/cli), and it is designed for the
+way people really use them:
 
-## What it does
+- **Keep your eyes on the work, not the terminal.** Parley reads completed
+  replies aloud and lets an agent speak during a long-running task.
+- **Have a real back-and-forth.** Dictate a response, interrupt naturally, or
+  permanently stop speech with a dedicated voice command.
+- **Run several agents without losing the thread.** Each response begins with
+  its session name, so you always know who is speaking.
+- **Choose the voice quality you want.** Use the built-in local voice for free,
+  or add OpenAI or ElevenLabs for more natural speech.
+- **Keep always-on listening local.** Wake and control phrases are recognized
+  on your Mac; cloud transcription happens only after you choose to send a
+  dictated message.
 
-- **Reads each reply aloud** as soon as it is finished, in a natural voice.
-- **Tells the model it is being listened to.** The `voice` skill carries one
-  line of context, so the agent writes speakable prose instead of markdown and
-  file paths. Nothing is post-processed — what it writes is what you hear.
-- **Lets the agent speak mid-task.** `parley say "..."` queues a line from
-  anywhere, so a long job can narrate itself instead of going silent.
-- **Listens back.** Say a wake phrase, talk, say a send phrase, and the message
-  is typed into the session. Layered so always-on listening stays cheap.
-- **Never overlaps.** Everything goes through one queue drained by a single
-  player. Replies, status updates and voice samples all take turns.
-- **Names the speaker.** Every automatic reply starts with its session name,
-  so several voice-enabled agents can share one audio queue without ambiguity.
-- **Per-session.** One session can speak while the rest stay quiet.
+Parley is per-session, so you decide which agents can speak. Turn it on when
+you want a conversation and leave every other terminal quiet.
 
 ## Install
 
