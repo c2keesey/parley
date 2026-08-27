@@ -1,5 +1,8 @@
 # parley
 
+[![CI](https://github.com/c2keesey/parley/actions/workflows/ci.yml/badge.svg)](https://github.com/c2keesey/parley/actions/workflows/ci.yml)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Two-way voice for terminal coding agents. Works with
 [Claude Code](https://claude.com/claude-code) and
 [Codex](https://developers.openai.com/codex/cli).
@@ -32,9 +35,13 @@ wires up whichever it finds.
 ## Install
 
 ```sh
-uv tool install parley      # or: pipx install parley
+uv tool install git+https://github.com/c2keesey/parley.git
 parley install              # wires up every agent it finds
 ```
+
+The distribution is named `parley-voice` because the `parley` name on PyPI
+belongs to an unrelated project. The installed command remains `parley`.
+Source installation is the supported path until the first PyPI release.
 
 `parley install` writes a `Stop` hook and the `voice` skill into each agent
 present on the machine:
@@ -183,11 +190,12 @@ paid API. This runs three layers, cheapest first:
 So the recurring cost is a fraction of a cent per message you send, and zero
 while you are quiet or merely talking to someone else in the room.
 
-The guardrails are the point. A wake phrase is required before any audio is
-kept, an explicit send phrase is required before anything is submitted, capture
-expires by itself after two minutes, and the microphone is ignored entirely
-while Claude is speaking — so it can never wake itself up on its own voice.
-Pick a wake phrase you would not say while talking *about* Claude.
+The guardrails are the point. A wake phrase is required before capture begins,
+an explicit send phrase is required before anything is submitted, and capture
+expires by itself after two minutes. During playback, overlapping audio may be
+examined locally for a wake phrase so you can interrupt naturally; it is never
+submitted unless that wake phrase opens a microphone turn and you later use the
+send command. Pick a wake phrase you would not use in ordinary conversation.
 
 ### What it needs from you
 
@@ -261,7 +269,31 @@ headphones take about that long to switch profiles and will otherwise swallow
 your first few words.
 
 `~/.parley/speak.log` records what was spoken, in which voice, and how
-long synthesis took.
+long synthesis took. It records message lengths and operational events, not
+the text you dictate or the text spoken back.
+
+## Privacy
+
+Parley has no analytics, account system, or Parley-operated server. The energy
+gate, trigger recognition, personalized matching, cue playback, and session
+routing stay on your Mac. Before the wake phrase, speech bursts may be examined
+by the bundled local trigger recognizer but are not retained.
+
+When you explicitly send a dictated message, its captured audio is sent to
+OpenAI for transcription. When speech output is enabled, the reply text is sent
+to the configured speech provider: ElevenLabs in `auto` mode when its key is
+available, otherwise OpenAI. Their respective data policies apply. Temporary
+audio, queue items, logs, and personalized trigger features live under
+`~/.parley`; Parley creates sensitive state with user-only permissions. Raw
+enrollment recordings are never saved.
+
+See [PRIVACY.md](PRIVACY.md) for the complete data-flow and deletion details.
+
+## Contributing
+
+Bug reports and focused pull requests are welcome. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md), and report vulnerabilities through GitHub's
+private vulnerability reporting rather than a public issue.
 
 ## License
 

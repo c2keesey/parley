@@ -1,19 +1,34 @@
 [project]
-name = "parley"
+name = "parley-voice"
 version = "0.5.0"
 description = "Two-way voice for terminal coding agents — hear replies read aloud, and talk back hands-free"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Chris Keesey" }]
 keywords = ["voice", "tts", "stt", "coding-agent", "hands-free", "accessibility"]
 dependencies = ["numpy>=2"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+]
 
 [project.scripts]
 parley = "parley.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/c2keesey/parley"
+Documentation = "https://github.com/c2keesey/parley#readme"
+Issues = "https://github.com/c2keesey/parley/issues"
+Changelog = "https://github.com/c2keesey/parley/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]
@@ -24,4 +39,7 @@ packages = ["src/parley"]
 artifacts = ["src/parley/skills/**", "src/parley/sounds/**"]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.12"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

@@ -8,8 +8,8 @@ holder pick up their work.
 import fcntl
 import json
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -22,7 +22,7 @@ def enqueue(text, voice=None, model=None):
     text = (text or "").strip()
     if not text:
         return False
-    config.QUEUE.mkdir(parents=True, exist_ok=True)
+    config.private_directory(config.QUEUE)
     item = {
         "text": text[: config.MAX_CHARS],
         "provider": config.provider(),
@@ -32,7 +32,7 @@ def enqueue(text, voice=None, model=None):
     name = f"{time.time_ns():020d}-{os.getpid()}.json"
     # Write then rename so a drainer never sees a half-written item.
     tmp = config.QUEUE / (name + ".tmp")
-    tmp.write_text(json.dumps(item))
+    config.private_write(tmp, json.dumps(item))
     tmp.rename(config.QUEUE / name)
     from parley import indicator
 

@@ -367,7 +367,7 @@ def inject(text):
     if submitted.returncode != 0:
         config.log(f"submission failed: could not press Enter in {pane}")
         return False
-    config.log(f"submitted to {pane}: {text[:80]!r}")
+    config.log(f"submitted to {pane} chars={len(text)}")
     return True
 
 

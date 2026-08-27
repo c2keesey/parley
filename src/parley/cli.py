@@ -170,7 +170,8 @@ def main(argv=None):
         return
 
     if command == "enroll":
-        from parley import listen as listener, triggers
+        from parley import listen as listener
+        from parley import triggers
 
         was_running = bool(listener.is_running())
         pane = listener.get_target()
@@ -216,7 +217,10 @@ def main(argv=None):
                 print(f"{marker} {item.get('name', 'Unnamed')}: {item['voice_id']}")
             print("Choose one with: export PARLEY_ELEVENLABS_VOICE_ID=<id>")
             return
-        sample = " ".join(args.text) or "This is how I sound reading your replies aloud."
+        sample = (
+            " ".join(args.text)
+            or "This is how I sound reading your replies aloud."
+        )
         for voice in config.VOICES:
             enqueue(f"{voice}. {sample}", voice=voice)
         print("Queued " + ", ".join(config.VOICES))

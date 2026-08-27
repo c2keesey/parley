@@ -1,3 +1,4 @@
+import stat
 import threading
 
 import pytest
@@ -85,6 +86,14 @@ def test_queue_uses_the_active_provider_voice_and_model(monkeypatch):
     assert job["provider"] == "elevenlabs"
     assert job["voice"] == "eleven-voice"
     assert job["model"] == "eleven-model"
+
+
+def test_queued_reply_is_private_on_disk():
+    player.enqueue("private assistant reply")
+
+    queued = player._pending()[0]
+    assert stat.S_IMODE(queued.stat().st_mode) == 0o600
+    assert stat.S_IMODE(config.QUEUE.stat().st_mode) == 0o700
 
 
 def test_stop_clears_the_queue():

@@ -27,7 +27,8 @@ LISTENER_STATE = STATE / "listener.state"
 TRIGGERS = STATE / "triggers"
 
 PROMPT = (
-    "Spoken session: Parley announces this session's name, then reads your reply aloud. "
+    "Spoken session: Parley announces this session's name, then reads your "
+    "reply aloud. "
     "Answer in a few sentences of plain speech — no markdown, code, or paths. "
     "Never use AskUserQuestion; it cannot be answered by voice. Ask in your reply."
 )
@@ -60,11 +61,30 @@ KEY_FILES = [
 ]
 
 
+def private_directory(path):
+    """Create a state directory that only the current user can inspect."""
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path, 0o700)
+    return path
+
+
+def private_write(path, content):
+    """Write a private state file without a world-readable creation window."""
+    private_directory(path.parent)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    descriptor = os.open(path, flags, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    os.chmod(path, 0o600)
+
+
 def log(msg):
     try:
-        STATE.mkdir(parents=True, exist_ok=True)
-        with open(LOG, "a") as fh:
+        private_directory(STATE)
+        descriptor = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(descriptor, "a", encoding="utf-8") as fh:
             fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+        os.chmod(LOG, 0o600)
     except OSError:
         pass
 

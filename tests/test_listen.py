@@ -141,6 +141,25 @@ def test_listener_state_is_persisted_and_refreshed(tmp_path, monkeypatch):
     assert refreshed == [True]
 
 
+def test_submission_log_does_not_include_dictated_text(monkeypatch):
+    calls = []
+    logs = []
+    monkeypatch.setattr(listen, "get_target", lambda: "%42")
+    monkeypatch.setattr(
+        listen.subprocess,
+        "run",
+        lambda argv, **kwargs: calls.append(argv) or type(
+            "Result", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(listen.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(listen.config, "log", logs.append)
+
+    assert listen.inject("my private dictated message")
+    assert calls[-1][-1] == "Enter"
+    assert logs == ["submitted to %42 chars=27"]
+    assert "private" not in logs[0]
+
+
 class FakeAudioStream:
     def __init__(self, chunks):
         self.chunks = iter(chunks)

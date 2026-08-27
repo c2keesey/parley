@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible problem without sharing private voice data
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach API keys, recordings, transcripts, or trigger profiles.
+  - type: input
+    id: version
+    attributes:
+      label: Parley version
+      placeholder: Output of parley --version
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS and Python versions
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include expected behavior and privacy-safe reproduction steps.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant sanitized logs
+      description: Remove pane names, dictated content, credentials, and personal data.
