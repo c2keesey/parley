@@ -17,7 +17,8 @@ While voice is on:
 
 For hands-free input, `parley listen on` from inside tmux. The user says
 "okay computer", speaks, then "send it", and the message is typed into the
-session. "scrap that" discards a message in progress.
+session. "scrap that" discards a message in progress. A persistent tmux badge
+shows when listening is live and which session will receive the message.
 
 While speech is playing, "okay computer, stop talking" is a local interrupt:
 it stops playback and is never sent as chat. Other wake-phrase input keeps the

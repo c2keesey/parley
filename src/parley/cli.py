@@ -59,6 +59,7 @@ def build_parser():
         command.add_argument("--harness", choices=sorted(hooks.TARGETS))
 
     sub.add_parser("hook", help="hook entry point (payload on stdin)")
+    sub.add_parser("indicator", help=argparse.SUPPRESS)
     return parser
 
 
@@ -74,6 +75,12 @@ def main(argv=None):
 
     if command == "hook":
         hooks.handle(argv=argv)
+        return
+
+    if command == "indicator":
+        from parley.indicator import text
+
+        print(text(), end="")
         return
 
     if command == "install":

@@ -114,6 +114,7 @@ def test_stop_talking_never_transcribes_cues_or_sends(tmp_path, monkeypatch):
     monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
     monkeypatch.setattr(listen, "bursts", lambda device: iter([
         ([b"voice control"], True),
     ]))
@@ -142,6 +143,7 @@ def test_other_wake_input_keeps_normal_dictation_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
     monkeypatch.setattr(listen, "bursts", lambda device: iter([
         ([b"wake"], False),
         ([b"message"], False),

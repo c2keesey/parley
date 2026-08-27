@@ -103,6 +103,11 @@ Voice output alone still leaves you typing. `parley listen` closes the
 loop: say the wake phrase, dictate, say the send phrase, and the message is
 typed into your agent's pane and submitted.
 
+While listening is active, every tmux session shows a high-contrast persistent
+`🎙 PARLEY LISTENING → <target>` badge. The badge checks the listener process
+on every status refresh, disappears if it stops or crashes, and follows the
+pane that will receive dictated messages.
+
 ```sh
 brew install whisper-cpp     # one-time
 parley listen on       # from inside the tmux pane running the agent

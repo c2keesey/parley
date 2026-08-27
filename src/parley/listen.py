@@ -29,7 +29,7 @@ import time
 import wave
 from pathlib import Path
 
-from parley import config, cues, player
+from parley import config, cues, indicator, player
 
 RATE = 16000
 FRAME = 1024
@@ -323,8 +323,10 @@ def run(device="0"):
     config.STATE.mkdir(parents=True, exist_ok=True)
     LISTEN_PID.write_text(str(os.getpid()))
     config.log(f"listening wake={WAKE!r} send={SEND!r} device={device}")
+    indicator.ensure()
 
     capturing, captured, started, last_heard = False, [], 0.0, 0.0
+    last_indicator = time.time()
 
     def finish(frames):
         cue("send")
@@ -341,6 +343,13 @@ def run(device="0"):
     try:
         for burst, overlapped in bursts(device):
             now = time.time()
+
+            # Newly launched Agent Deck sessions get the badge without a
+            # listener restart. The displayed text itself checks this process
+            # on every tmux status refresh, so a crash cannot leave a false ON.
+            if now - last_indicator >= 5:
+                indicator.ensure()
+                last_indicator = now
 
             if capturing:
                 # Two independent stops. Silence means you walked away or the
