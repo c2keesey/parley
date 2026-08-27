@@ -94,7 +94,7 @@ def test_send_phrase_is_only_stripped_from_the_end():
 @pytest.mark.parametrize("heard", [
     "send it",
     "Send it.",
-    "finish this and send it now",
+    "finish this and send it",
     "Sunday.",
 ])
 def test_send_command_tolerates_the_observed_local_asr_variant(heard):
@@ -104,6 +104,9 @@ def test_send_command_tolerates_the_observed_local_asr_variant(heard):
 @pytest.mark.parametrize("heard", [
     "deploy on Sunday",
     "Sunday is the maintenance window",
+    "finish this and send it now",
+    "the send it command is not always going through",
+    "I said send it in the middle and kept talking",
     "send",
     "send this",
 ])
@@ -305,6 +308,49 @@ def test_sunday_asr_variant_submits_and_releases_microphone_turn(
     listen.run()
 
     assert sent == ["run the real path"]
+    assert actions == ["pause", "wake", "send", "resume"]
+
+
+def test_send_it_inside_content_does_not_end_capture_or_get_removed(
+        tmp_path, monkeypatch):
+    actions = []
+    sent = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"wake"], False),
+        ([b"internal phrase"], False),
+        ([b"continued message"], False),
+        ([b"send"], False),
+    ]))
+    heard = iter([
+        "okay computer",
+        "I said send it in the middle and kept talking",
+        "so this content must still be captured",
+        "Sunday.",
+    ])
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+    monkeypatch.setattr(
+        listen, "transcribe_cloud",
+        lambda frames: (
+            "okay computer I said send it in the middle and kept talking "
+            "so this content must still be captured send it"
+        ),
+    )
+    monkeypatch.setattr(listen, "inject", lambda text: sent.append(text))
+    monkeypatch.setattr(listen.player, "pause", lambda: actions.append("pause"))
+    monkeypatch.setattr(listen.player, "resume", lambda: actions.append("resume"))
+    monkeypatch.setattr(listen, "cue", lambda kind: actions.append(kind))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert sent == [
+        "I said send it in the middle and kept talking "
+        "so this content must still be captured",
+    ]
     assert actions == ["pause", "wake", "send", "resume"]
 
 

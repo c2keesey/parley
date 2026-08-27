@@ -184,13 +184,14 @@ def is_cancel(text):
 
 
 def is_send(text):
-    """Recognise the configured command and one demonstrated tiny-ASR miss."""
-    if contains_phrase(text, SEND):
+    """Recognise a trailing command and one demonstrated tiny-ASR miss."""
+    words, target = normalize(text), normalize(SEND)
+    if target and len(words) >= len(target) and words[-len(target):] == target:
         return True
     # Chris's isolated "send it" has repeatedly been rendered as "Sunday" by
     # tiny.en. Bound this phonetic fallback to the whole burst so ordinary
     # dictation such as "deploy on Sunday" cannot submit the message.
-    return normalize(SEND) == ["send", "it"] and normalize(text) == ["sunday"]
+    return target == ["send", "it"] and words == ["sunday"]
 
 
 def is_stop_talking(text, overlapped):
