@@ -88,6 +88,9 @@ def test_wake_phrase_is_what_makes_overlapping_audio_safe():
 @pytest.mark.parametrize("heard", [
     "okay computer stop talking",
     "Okay, computer, stop talking!",
+    "Okay, computers stop talking.",
+    "OK computers, stop talking!",
+    "Um, okay, computer's stop talking now.",
 ])
 def test_stop_talking_is_a_local_control_only_during_playback(heard):
     assert is_stop_talking(heard, overlapped=True)
@@ -98,6 +101,9 @@ def test_stop_talking_is_a_local_control_only_during_playback(heard):
     "stop talking",
     "okay computer stop the server",
     "okay computer talk about stop conditions",
+    "okay supercomputers stop talking",
+    "okay computer stops talking",
+    "okay computers stop the talking process",
 ])
 def test_stop_talking_near_misses_remain_normal_input(heard):
     assert not is_stop_talking(heard, overlapped=True)
@@ -113,7 +119,7 @@ def test_stop_talking_never_transcribes_cues_or_sends(tmp_path, monkeypatch):
     ]))
     monkeypatch.setattr(
         listen, "transcribe_local",
-        lambda frames: "okay computer stop talking",
+        lambda frames: "Okay, computers stop talking.",
     )
     monkeypatch.setattr(
         listen, "transcribe_cloud",

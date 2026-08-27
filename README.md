@@ -117,7 +117,9 @@ means capture expired. Change the phrases with `PARLEY_WAKE` and `PARLEY_SEND`.
 While Parley is speaking, **"okay computer, stop talking"** is a dedicated
 local voice-control command. It immediately silences playback, clears queued
 speech, makes no confirmation sound, and is never transcribed or sent as chat.
-Other wake-phrase input keeps the normal dictate-and-send flow.
+The local matcher tolerates narrow transcription variants such as
+`computer`/`computers`; other wake-phrase input keeps the normal
+dictate-and-send flow.
 
 Wake and send cues remain tiny bundled files rather than live AI generations.
 ElevenLabs' [sound-effects API](https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert)

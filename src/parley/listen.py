@@ -94,8 +94,36 @@ def contains_phrase(text, phrase):
 
 
 def is_stop_talking(text, overlapped):
-    """The dedicated interrupt is trusted only when playback overlapped it."""
-    return overlapped and contains_phrase(text, f"{WAKE} {STOP_TALKING}")
+    """Recognise a narrow set of local-ASR variants only during playback."""
+    if not overlapped:
+        return False
+
+    # Whisper commonly renders "okay" as "OK" and "computer" as the plural
+    # or possessive "computers". Accept those bounded wake-word variants while
+    # keeping the action phrase exact; fuzzy-matching "stop talking" itself
+    # would make an accidental local control trigger much more likely.
+    words = normalize(text.replace("'", "").replace("’", ""))
+    wake, action = normalize(WAKE), normalize(STOP_TALKING)
+    width = len(wake) + len(action)
+    if not wake or not action or len(words) < width:
+        return False
+
+    def wake_matches(heard):
+        for index, (actual, expected) in enumerate(zip(heard, wake)):
+            if actual == expected:
+                continue
+            if expected == "okay" and actual == "ok":
+                continue
+            if index == len(wake) - 1 and actual == expected + "s":
+                continue
+            return False
+        return True
+
+    for start in range(len(words) - width + 1):
+        candidate = words[start:start + width]
+        if wake_matches(candidate[:len(wake)]) and candidate[len(wake):] == action:
+            return True
+    return False
 
 
 def strip_phrase(text, phrase):
