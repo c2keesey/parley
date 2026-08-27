@@ -12,6 +12,13 @@ from parley.listen import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolate_microphone_turn(monkeypatch):
+    monkeypatch.setattr(listen.player, "pause", lambda: False)
+    monkeypatch.setattr(listen.player, "resume", lambda: False)
+    monkeypatch.setattr(listen.player, "microphone_active", lambda: False)
+
+
 @pytest.mark.parametrize("heard", [
     "okay computer",
     "Okay, computer.",
@@ -264,7 +271,8 @@ def test_wake_rechecks_just_starting_playback_and_barges_in(
     heard = iter(["okay computer", "talk to me send it"])
     monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
     monkeypatch.setattr(listen, "speaking", lambda: True)
-    monkeypatch.setattr(listen.player, "stop", lambda: actions.append("stopped"))
+    monkeypatch.setattr(listen.player, "pause", lambda: actions.append("paused"))
+    monkeypatch.setattr(listen.player, "resume", lambda: actions.append("resumed"))
     monkeypatch.setattr(
         listen, "transcribe_cloud",
         lambda frames: "okay computer talk to me send it",
@@ -275,8 +283,91 @@ def test_wake_rechecks_just_starting_playback_and_barges_in(
 
     listen.run()
 
-    assert actions == ["stopped", "wake", "send"]
+    assert actions == ["paused", "wake", "send", "resumed"]
     assert sent == ["talk to me"]
+
+
+def test_dictation_turn_pauses_before_wake_and_resumes_after_injection(
+        tmp_path, monkeypatch):
+    actions = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"wake"], True),
+        ([b"message"], False),
+    ]))
+    heard = iter(["okay computer", "reply to this send it"])
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+    monkeypatch.setattr(listen.player, "pause", lambda: actions.append("pause"))
+    monkeypatch.setattr(listen.player, "resume", lambda: actions.append("resume"))
+    monkeypatch.setattr(
+        listen, "transcribe_cloud",
+        lambda frames: "okay computer reply to this send it",
+    )
+    monkeypatch.setattr(listen, "inject", lambda text: actions.append(f"inject:{text}"))
+    monkeypatch.setattr(listen, "cue", lambda kind: actions.append(f"cue:{kind}"))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert actions == [
+        "pause",
+        "cue:wake",
+        "cue:send",
+        "inject:reply to this",
+        "resume",
+    ]
+
+
+def test_cancel_releases_exclusive_microphone_turn(tmp_path, monkeypatch):
+    actions = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"wake"], False),
+        ([b"cancel"], False),
+    ]))
+    heard = iter(["okay computer", "scratch that"])
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+    monkeypatch.setattr(listen.player, "pause", lambda: actions.append("pause"))
+    monkeypatch.setattr(listen.player, "resume", lambda: actions.append("resume"))
+    monkeypatch.setattr(listen, "cue", lambda kind: actions.append(kind))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert actions == ["pause", "wake", "cancel", "resume"]
+
+
+def test_transcription_failure_releases_exclusive_microphone_turn(
+        tmp_path, monkeypatch):
+    actions = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"wake"], False),
+        ([b"send"], False),
+    ]))
+    heard = iter(["okay computer", "send it"])
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+    monkeypatch.setattr(listen.player, "pause", lambda: actions.append("pause"))
+    monkeypatch.setattr(listen.player, "resume", lambda: actions.append("resume"))
+    monkeypatch.setattr(
+        listen, "transcribe_cloud",
+        lambda frames: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    monkeypatch.setattr(listen, "cue", lambda kind: actions.append(kind))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert actions == ["pause", "wake", "send", "resume"]
 
 
 def test_repeated_wake_replays_tone_keeps_listening_and_is_not_sent(

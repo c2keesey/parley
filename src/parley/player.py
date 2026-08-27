@@ -8,6 +8,7 @@ holder pick up their work.
 import fcntl
 import json
 import os
+import signal
 import shutil
 import subprocess
 import tempfile
@@ -53,24 +54,40 @@ def _wake_output():
 
 def play(audio, interrupt=None):
     config.STATE.mkdir(parents=True, exist_ok=True)
+    proc = None
     with tempfile.NamedTemporaryFile(
         suffix=".mp3", delete=False, dir=config.STATE
     ) as fh:
         fh.write(audio)
         path = fh.name
     try:
-        if interrupt is not None and _interrupt_token() != interrupt:
+        if not _wait_for_microphone(interrupt):
             return False
         proc = subprocess.Popen(["afplay", path])
         with open(config.PIDFILE, "a") as fh:
             fh.write(f"{proc.pid}\n")
-        # Close the last race between the pre-launch token check and afplay
-        # publishing its pid. An interrupt in that window stops it here.
+        config.SPEECH_PID.write_text(str(proc.pid))
+        # Close the race between checking the microphone turn and publishing
+        # the new audio pid. A turn that opened in that window pauses it here.
+        if microphone_active():
+            os.kill(proc.pid, signal.SIGSTOP)
+            config.log("speech paused during audio launch")
+            if not _wait_for_microphone(interrupt):
+                proc.terminate()
+            else:
+                os.kill(proc.pid, signal.SIGCONT)
+                config.log("speech resumed after microphone turn")
         if interrupt is not None and _interrupt_token() != interrupt:
             proc.terminate()
         proc.wait()
         return interrupt is None or _interrupt_token() == interrupt
     finally:
+        try:
+            if proc is not None and config.SPEECH_PID.read_text().strip() == str(
+                    proc.pid):
+                config.SPEECH_PID.unlink(missing_ok=True)
+        except OSError:
+            pass
         try:
             os.unlink(path)
         except OSError:
@@ -98,8 +115,62 @@ def _pid_alive(path):
         return False
 
 
+def microphone_active():
+    """True only while the listener process owning the microphone is alive."""
+    if _pid_alive(config.MIC_TURN):
+        return True
+    was_marked = config.MIC_TURN.exists()
+    config.MIC_TURN.unlink(missing_ok=True)
+    if was_marked and _signal_speech(signal.SIGCONT):
+        config.log("recovered stale microphone turn; speech resumed")
+    return False
+
+
+def _wait_for_microphone(interrupt=None):
+    """Hold spoken output behind an exclusive microphone turn."""
+    while microphone_active():
+        if interrupt is not None and _interrupt_token() != interrupt:
+            return False
+        time.sleep(0.05)
+    return interrupt is None or _interrupt_token() == interrupt
+
+
+def _signal_speech(sig):
+    try:
+        pid = int(config.SPEECH_PID.read_text().strip())
+        os.kill(pid, sig)
+        return True
+    except (OSError, ValueError):
+        config.SPEECH_PID.unlink(missing_ok=True)
+        return False
+
+
+def pause():
+    """Give the microphone the floor while preserving current and queued speech."""
+    config.STATE.mkdir(parents=True, exist_ok=True)
+    config.MIC_TURN.write_text(str(os.getpid()))
+    paused = _signal_speech(signal.SIGSTOP)
+    config.log(
+        f"microphone turn started speech={'paused' if paused else 'waiting'}")
+    return paused
+
+
+def resume():
+    """Release the microphone turn and continue the same speech process."""
+    had_turn = config.MIC_TURN.exists()
+    config.MIC_TURN.unlink(missing_ok=True)
+    if not had_turn:
+        return False
+    resumed = _signal_speech(signal.SIGCONT)
+    config.log(
+        f"microphone turn ended speech={'resumed' if resumed else 'released'}")
+    return resumed
+
+
 def active():
     """True from queued/synthesizing speech through the end of playback."""
+    if microphone_active():
+        return False
     return bool(_pending()) or _pid_alive(config.DRAIN_PID)
 
 
@@ -152,11 +223,15 @@ def drain():
                 if _interrupt_token() != interrupt:
                     config.log("speech interrupted before playback")
                     return True
+                if not _wait_for_microphone(interrupt):
+                    return True
                 if not woke:
                     _wake_output()
                     woke = True
                 if _interrupt_token() != interrupt:
                     config.log("speech interrupted during output warm-up")
+                    return True
+                if not _wait_for_microphone(interrupt):
                     return True
                 play(audio, interrupt)
                 if _interrupt_token() != interrupt:
@@ -178,24 +253,34 @@ def drain():
 
 
 def stop():
-    """Drop everything queued and silence anything playing."""
+    """Permanently discard current and queued speech."""
     config.STATE.mkdir(parents=True, exist_ok=True)
     config.INTERRUPT.write_text(str(time.time_ns()))
+    config.MIC_TURN.unlink(missing_ok=True)
     for item in _pending():
         item.unlink(missing_ok=True)
     try:
         pids = config.PIDFILE.read_text().split()
     except OSError:
         pids = []
+    try:
+        speech_pid = config.SPEECH_PID.read_text().strip()
+    except OSError:
+        speech_pid = ""
     for pid in pids:
         try:
             os.kill(int(pid), 15)
+            # A SIGTERM sent to a SIGSTOP-paused process is handled once it is
+            # continued. This guarantees explicit stop is permanent.
+            if pid == speech_pid:
+                os.kill(int(pid), signal.SIGCONT)
         except (OSError, ValueError):
             pass
     try:
         config.PIDFILE.write_text("")
     except OSError:
         pass
+    config.SPEECH_PID.unlink(missing_ok=True)
 
 
 def detach(fn):

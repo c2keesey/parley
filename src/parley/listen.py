@@ -299,6 +299,8 @@ def transcribe_cloud(frames):
 
 def speaking():
     """True while speech is queued, synthesizing, warming up, or playing."""
+    if player.microphone_active():
+        return False
     if player.active():
         return True
     try:
@@ -418,14 +420,17 @@ def run(device="0"):
     def finish(frames):
         cue("send")
         try:
-            spoken = transcribe_cloud(frames)
-        except Exception as exc:
-            config.log(f"transcription failed: {exc}")
-            return
-        message = strip_phrase(strip_wake_phrases(spoken), SEND)
-        config.log(f"message {message[:80]!r}")
-        if message:
-            inject(message)
+            try:
+                spoken = transcribe_cloud(frames)
+            except Exception as exc:
+                config.log(f"transcription failed: {exc}")
+                return
+            message = strip_phrase(strip_wake_phrases(spoken), SEND)
+            config.log(f"message {message[:80]!r}")
+            if message:
+                inject(message)
+        finally:
+            player.resume()
 
     try:
         for burst, overlapped in bursts(device):
@@ -446,16 +451,19 @@ def run(device="0"):
                     capturing, captured = False, []
                     cue("cancel")
                     config.log("discarded: silent too long")
+                    player.resume()
                     continue
                 if now - started > HARD_STOP:
                     capturing, captured = False, []
                     cue("cancel")
                     config.log("discarded: hard stop")
+                    player.resume()
                     continue
                 if len(captured) * FRAME / RATE > HARD_STOP:
                     capturing, captured = False, []
                     cue("cancel")
                     config.log("discarded: too much audio")
+                    player.resume()
                     continue
 
             if burst is None:
@@ -470,7 +478,7 @@ def run(device="0"):
             # This is a voice-control command, not dictation. It is handled
             # before capture state, never reaches cloud transcription, emits
             # no confirmation sound, and cannot become a chat message.
-            if is_stop_talking(heard, overlapped):
+            if is_stop_talking(heard, overlapped or speaking()):
                 player.stop()
                 capturing, captured = False, []
                 config.log("voice-control: stopped talking")
@@ -479,16 +487,16 @@ def run(device="0"):
             if not capturing:
                 if not contains_phrase(heard, WAKE):
                     continue
-                # Barge-in: if this landed over the agent's own speech, stop it
-                # talking. Requiring the wake phrase is what makes overlapping
-                # audio safe to act on.
+                # Barge-in pauses rather than discards. The microphone marker
+                # is also set when nothing is speaking yet, making dictation an
+                # exclusive turn that all newly queued speech must wait behind.
                 # The burst tag reflects whether playback was active while its
                 # frames arrived. Recheck now as well: synthesis can finish and
                 # playback can start while local transcription is running.
-                if overlapped or speaking():
-                    player.stop()
-                    config.log(
-                        "barged in: stopped active or pending playback")
+                was_speaking = overlapped or speaking()
+                player.pause()
+                if was_speaking:
+                    config.log("barged in: paused active or pending playback")
                 # Keep this burst — you normally keep talking in the same breath
                 # as the wake phrase. strip_leading drops everything up to and
                 # including it, which also removes any of the agent's words.
@@ -504,6 +512,7 @@ def run(device="0"):
                 capturing, captured = False, []
                 cue("cancel")
                 config.log("discarded")
+                player.resume()
                 continue
 
             if contains_wake(heard):
@@ -518,6 +527,8 @@ def run(device="0"):
             frames, captured = captured, []
             finish(frames)
     finally:
+        if capturing:
+            player.resume()
         LISTEN_PID.unlink(missing_ok=True)
 
 
@@ -538,4 +549,5 @@ def stop():
         except OSError:
             pass
     LISTEN_PID.unlink(missing_ok=True)
+    player.resume()
     return bool(pid)

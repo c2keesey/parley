@@ -11,7 +11,9 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "QUEUE", tmp_path / "queue")
     monkeypatch.setattr(config, "LOCK", tmp_path / "player.lock")
     monkeypatch.setattr(config, "PIDFILE", tmp_path / "playing.pid")
+    monkeypatch.setattr(config, "SPEECH_PID", tmp_path / "speech.pid")
     monkeypatch.setattr(config, "DRAIN_PID", tmp_path / "drainer.pid")
+    monkeypatch.setattr(config, "MIC_TURN", tmp_path / "microphone-turn.pid")
     monkeypatch.setattr(config, "LOG", tmp_path / "speak.log")
     monkeypatch.setattr(config, "INTERRUPT", tmp_path / "interrupt")
 
@@ -110,12 +112,13 @@ def test_interrupting_playback_suppresses_the_done_chime(monkeypatch):
 def test_stop_terminates_the_active_audio_process(monkeypatch):
     killed = []
     config.PIDFILE.write_text("4242\n")
+    config.SPEECH_PID.write_text("4242")
     monkeypatch.setattr(player.os, "kill", lambda pid, signal: killed.append(
         (pid, signal)))
 
     player.stop()
 
-    assert killed == [(4242, 15)]
+    assert killed == [(4242, 15), (4242, player.signal.SIGCONT)]
     assert config.PIDFILE.read_text() == ""
 
 
@@ -212,3 +215,120 @@ def test_interrupt_in_audio_launch_window_terminates_new_process(monkeypatch):
 
     assert played is False
     assert terminated == [4242]
+
+
+def test_pause_preserves_queue_and_resume_keeps_interrupt_token(monkeypatch):
+    signals = []
+    config.SPEECH_PID.write_text("4242")
+    monkeypatch.setattr(
+        player.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+    player.enqueue("current response")
+    interrupt = player._interrupt_token()
+
+    assert player.pause()
+    assert len(player._pending()) == 1
+    assert player._interrupt_token() == interrupt
+    assert player.resume()
+
+    assert signals == [
+        (4242, player.signal.SIGSTOP),
+        (4242, player.signal.SIGCONT),
+    ]
+    assert len(player._pending()) == 1
+    assert player._interrupt_token() == interrupt
+
+
+def test_new_speech_waits_for_exclusive_microphone_turn(monkeypatch):
+    synthesized = threading.Event()
+    played = threading.Event()
+
+    def synthesize(text, voice, model, provider):
+        synthesized.set()
+        return b"audio"
+
+    monkeypatch.setattr(player, "synthesize", synthesize)
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(
+        player, "play", lambda audio, interrupt=None: played.set())
+    player.pause()
+    player.enqueue("queued while Chris is dictating")
+    thread = threading.Thread(target=player.drain)
+    thread.start()
+
+    assert synthesized.wait(timeout=1)
+    assert not played.wait(timeout=0.15)
+    player.resume()
+    thread.join(timeout=2)
+
+    assert played.is_set()
+    assert not thread.is_alive()
+
+
+def test_explicit_stop_discards_paused_and_queued_speech(monkeypatch):
+    killed = []
+    config.SPEECH_PID.write_text("4242")
+    config.PIDFILE.write_text("4242\n")
+    monkeypatch.setattr(
+        player.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    player.pause()
+    player.enqueue("this must be discarded")
+
+    player.stop()
+
+    assert player._pending() == []
+    assert not config.MIC_TURN.exists()
+    assert not config.SPEECH_PID.exists()
+    assert (4242, 15) in killed
+
+
+def test_microphone_turn_opening_during_audio_launch_pauses_new_process(
+        monkeypatch):
+    signals = []
+
+    class Process:
+        pid = 4242
+
+        def __init__(self):
+            config.MIC_TURN.write_text(str(os.getpid()))
+
+        def terminate(self):
+            pytest.fail("a temporary microphone turn must not discard speech")
+
+        def wait(self):
+            return 0
+
+    import os
+
+    def kill(pid, sig):
+        if pid == os.getpid() and sig == 0:
+            return
+        signals.append((pid, sig))
+        if sig == player.signal.SIGSTOP:
+            config.MIC_TURN.unlink()
+
+    monkeypatch.setattr(
+        player.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(player.os, "kill", kill)
+
+    assert player.play(b"audio", player._interrupt_token())
+    assert signals == [
+        (4242, player.signal.SIGSTOP),
+        (4242, player.signal.SIGCONT),
+    ]
+
+
+def test_stale_microphone_turn_recovers_paused_speech(monkeypatch):
+    signals = []
+    config.MIC_TURN.write_text("99999")
+    config.SPEECH_PID.write_text("4242")
+
+    def kill(pid, sig):
+        if pid == 99999 and sig == 0:
+            raise ProcessLookupError
+        signals.append((pid, sig))
+
+    monkeypatch.setattr(player.os, "kill", kill)
+
+    assert not player.microphone_active()
+    assert not config.MIC_TURN.exists()
+    assert signals == [(4242, player.signal.SIGCONT)]

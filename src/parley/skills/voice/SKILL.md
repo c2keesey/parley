@@ -24,8 +24,10 @@ Repeating "okay computer" during capture replays the wake tone, keeps capture
 active, and removes that repeated wake phrase from the message.
 
 While speech is playing, "okay computer, stop talking" is a local interrupt:
-it stops playback and is never sent as chat. Other wake-phrase input keeps the
-normal dictate-and-send flow.
+it permanently stops current and queued speech and is never sent as chat.
+Ordinary "okay computer" pauses the current response for an exclusive
+dictation turn; speech resumes from that position after send or cancel, and
+newly queued speech waits until the microphone turn ends.
 
 Parley automatically uses ElevenLabs speech when its key is in macOS Keychain
 or `ELEVENLABS_API_KEY` is configured. `parley voices` lists available voice

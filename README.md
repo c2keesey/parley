@@ -139,6 +139,12 @@ The local matcher tolerates narrow transcription variants such as
 `computer`/`computers`; other wake-phrase input keeps the normal
 dictate-and-send flow.
 
+Ordinary **"okay computer"** is a conversational pause, not a permanent stop.
+Parley pauses the current response at its present position, gives the
+microphone an exclusive turn, and resumes the same response after the dictated
+message is sent or cancelled. Any newly queued speech waits silently behind
+that microphone turn. Only the explicit stop-talking command discards speech.
+
 Wake and send cues remain tiny bundled files rather than live AI generations.
 ElevenLabs' [sound-effects API](https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert)
 is useful for design-time exploration, but its minimum generated duration is
