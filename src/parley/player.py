@@ -24,8 +24,9 @@ def enqueue(text, voice=None, model=None):
     config.QUEUE.mkdir(parents=True, exist_ok=True)
     item = {
         "text": text[: config.MAX_CHARS],
-        "voice": voice or config.VOICE,
-        "model": model or config.MODEL,
+        "provider": config.provider(),
+        "voice": voice or config.active_voice(),
+        "model": model or config.active_model(),
     }
     name = f"{time.time_ns():020d}-{os.getpid()}.json"
     # Write then rename so a drainer never sees a half-written item.
@@ -110,7 +111,10 @@ def drain():
             item.unlink(missing_ok=True)
             try:
                 started = time.time()
-                audio = synthesize(job["text"], job.get("voice"), job.get("model"))
+                audio = synthesize(
+                    job["text"], job.get("voice"), job.get("model"),
+                    job.get("provider"),
+                )
                 config.log(
                     f"spoke {job.get('voice')} {len(job['text'])}c "
                     f"synth={time.time() - started:.1f}s {len(audio)}b"

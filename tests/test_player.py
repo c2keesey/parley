@@ -25,7 +25,7 @@ def recorder(monkeypatch):
         played.append(audio.decode())
         live.pop()
 
-    monkeypatch.setattr(player, "synthesize", lambda text, v, m: text.encode())
+    monkeypatch.setattr(player, "synthesize", lambda text, v, m, p: text.encode())
     monkeypatch.setattr(player, "play", fake_play)
     monkeypatch.setattr(player, "_wake_output", lambda: None)
     return played
@@ -50,7 +50,7 @@ def test_concurrent_drainers_never_overlap(recorder):
 
 
 def test_only_one_drainer_wins_the_lock(monkeypatch):
-    monkeypatch.setattr(player, "synthesize", lambda text, v, m: b"")
+    monkeypatch.setattr(player, "synthesize", lambda text, v, m, p: b"")
     monkeypatch.setattr(player, "_wake_output", lambda: None)
     holder_got_lock = []
 
@@ -67,6 +67,19 @@ def test_only_one_drainer_wins_the_lock(monkeypatch):
 def test_empty_text_is_not_queued():
     assert player.enqueue("   ") is False
     assert player.enqueue("real") is True
+
+
+def test_queue_uses_the_active_provider_voice_and_model(monkeypatch):
+    monkeypatch.setattr(config, "provider", lambda: "elevenlabs")
+    monkeypatch.setattr(config, "active_voice", lambda: "eleven-voice")
+    monkeypatch.setattr(config, "active_model", lambda: "eleven-model")
+    player.enqueue("hello")
+    import json
+
+    job = json.loads(player._pending()[0].read_text())
+    assert job["provider"] == "elevenlabs"
+    assert job["voice"] == "eleven-voice"
+    assert job["model"] == "eleven-model"
 
 
 def test_stop_clears_the_queue():

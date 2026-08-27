@@ -12,9 +12,10 @@ Tuned to published earcon guidance rather than taste:
     (finished), falling and darker means discarded.
   - Match loudness across the set so no one cue jumps out.
 
-Generated rather than shipped, so there are no asset files and no ffmpeg
-dependency. To use a sound pack instead, point PARLEY_CUE_<NAME> at a wav or
-mp3 file; plenty of CC0 UI packs exist and nothing here assumes these tones.
+The wake and send tones are generated from the patterns below and shipped so
+the exact new sound is immediate after install. The done and cancel cues remain
+from Kenney's CC0 interface packs. To use your own sound pack instead, point
+PARLEY_CUE_<NAME> at a wav or mp3 file.
 
 Cues register with the player's pid file, so the listener treats them as
 "the agent is making noise" and will not try to transcribe them.
@@ -29,7 +30,7 @@ from pathlib import Path
 from parley import config
 
 RATE = 44100
-AMPLITUDE = 0.16
+AMPLITUDE = 0.10
 # Fundamental plus one quiet octave. No third harmonic: over these
 # fundamentals it would sit in the harsh 3-6kHz band.
 HARMONICS = [(1.0, 1.0), (2.0, 0.14)]
@@ -37,8 +38,8 @@ HARMONICS = [(1.0, 1.0), (2.0, 0.14)]
 # (frequency, seconds). All fundamentals sit under 1kHz, so the highest
 # partial in the set is about 2kHz.
 PATTERNS = {
-    "wake": [(523.25, 0.07), (783.99, 0.13)],    # C5 -> G5 rising, ready
-    "send": [(659.25, 0.06), (987.77, 0.13)],    # E5 -> B5 rising, committed
+    "wake": [(392.00, 0.12)],                     # one warm G4 bloom, listening
+    "send": [(392.00, 0.05), (523.25, 0.10)],    # low G4 -> C5, gently committed
     "done": [(783.99, 0.07), (523.25, 0.15)],    # G5 -> C5 falling, resolved
     "cancel": [(466.16, 0.07), (349.23, 0.15)],  # Bb4 -> F4 falling, dropped
 }
@@ -56,11 +57,9 @@ def override(name):
 def bundled(name):
     """The shipped sound for this cue.
 
-    These are from Kenney's CC0 interface packs — sounds made by someone who
-    does this for a living, loudness-matched to -14 LUFS so the set is even.
-    Chosen for meaning, not just pleasantness: an interrogative to open, a
-    confirmation to commit, a resolved bell to close, a retreat to discard.
-    The synthesized tones remain as a fallback if the files are missing.
+    Wake and send are Parley's quiet generated earcons. Done and cancel are
+    from Kenney's CC0 interface packs. The synthesizer remains as a fallback
+    if an asset is missing.
     """
     if os.environ.get("PARLEY_SYNTH_CUES"):
         return None

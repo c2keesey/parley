@@ -12,7 +12,8 @@ from parley.player import detach, drain, enqueue, stop
 def _report(keys):
     on = hooks.is_on(keys)
     print(f"parley: {'on' if on else 'off'} for this session "
-          f"(voice={config.VOICE}, model={config.MODEL})")
+          f"(provider={config.provider()}, voice={config.active_voice()}, "
+          f"model={config.active_model()})")
     if on:
         # Printed so that turning voice on mid-session lands in the agent's
         # transcript as context, without needing a session-start hook.
@@ -36,7 +37,7 @@ def build_parser():
 
     say = sub.add_parser("say", help="queue a line (status updates, asides)")
     say.add_argument("text", nargs="+")
-    say.add_argument("--voice", choices=config.VOICES)
+    say.add_argument("--voice", help="OpenAI voice name or ElevenLabs voice ID")
     say.add_argument("--model")
     say.add_argument("--wait", action="store_true",
                      help="block until it has finished speaking")
@@ -166,6 +167,15 @@ def main(argv=None):
         return
 
     if command == "voices":
+        if config.provider() == "elevenlabs":
+            from parley.tts import voices
+
+            active = config.active_voice()
+            for item in voices():
+                marker = "*" if item["voice_id"] == active else " "
+                print(f"{marker} {item.get('name', 'Unnamed')}: {item['voice_id']}")
+            print("Choose one with: export PARLEY_ELEVENLABS_VOICE_ID=<id>")
+            return
         sample = " ".join(args.text) or "This is how I sound reading your replies aloud."
         for voice in config.VOICES:
             enqueue(f"{voice}. {sample}", voice=voice)

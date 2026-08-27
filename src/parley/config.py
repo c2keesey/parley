@@ -23,9 +23,13 @@ PROMPT = (
     "Never use AskUserQuestion; it cannot be answered by voice. Ask in your reply."
 )
 
+PROVIDER = os.environ.get("PARLEY_TTS_PROVIDER", "auto").lower()
 MODEL = os.environ.get("PARLEY_MODEL", "gpt-4o-mini-tts-2025-12-15")
 FALLBACKS = ["gpt-4o-mini-tts", "tts-1"]
 VOICE = os.environ.get("PARLEY_VOICE", "fable")
+ELEVENLABS_MODEL = os.environ.get("PARLEY_ELEVENLABS_MODEL", "eleven_v3")
+ELEVENLABS_VOICE = os.environ.get(
+    "PARLEY_ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # George
 SPEED = float(os.environ.get("PARLEY_SPEED", "1.2"))
 INSTRUCTIONS = os.environ.get(
     "PARLEY_INSTRUCTIONS",
@@ -52,10 +56,10 @@ def log(msg):
         pass
 
 
-def api_key():
-    """OPENAI_API_KEY from the environment, or the first key file that has one."""
-    if os.environ.get("OPENAI_API_KEY"):
-        return os.environ["OPENAI_API_KEY"]
+def secret(name):
+    """A provider key from the environment or Parley's shared env file."""
+    if os.environ.get(name):
+        return os.environ[name]
     for path in KEY_FILES:
         if not path or not os.path.exists(path):
             continue
@@ -65,9 +69,35 @@ def api_key():
             continue
         for line in lines:
             line = line.strip()
-            if line.startswith("#") or "OPENAI_API_KEY" not in line:
+            if line.startswith("#") or not line.startswith(name + "="):
                 continue
             value = line.split("=", 1)[-1].strip().strip("\"'")
-            if value.startswith("sk-"):
+            if value:
                 return value
     return None
+
+
+def api_key():
+    """Backward-compatible OpenAI key lookup used by transcription."""
+    return secret("OPENAI_API_KEY")
+
+
+def elevenlabs_api_key():
+    return secret("ELEVENLABS_API_KEY")
+
+
+def provider():
+    if PROVIDER not in ("auto", "openai", "elevenlabs"):
+        raise RuntimeError(
+            "PARLEY_TTS_PROVIDER must be auto, openai, or elevenlabs")
+    if PROVIDER == "auto":
+        return "elevenlabs" if elevenlabs_api_key() else "openai"
+    return PROVIDER
+
+
+def active_voice():
+    return ELEVENLABS_VOICE if provider() == "elevenlabs" else VOICE
+
+
+def active_model():
+    return ELEVENLABS_MODEL if provider() == "elevenlabs" else MODEL

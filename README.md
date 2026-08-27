@@ -55,8 +55,22 @@ parley uninstall            # optionally --harness <name>
 With the skill installed you can just say "voice on" or "voice off" to the
 agent, in either tool, instead of running the command yourself.
 
-You need an OpenAI API key, either in `OPENAI_API_KEY` or in a file at
-`~/.config/parley/env` containing `OPENAI_API_KEY=sk-...`.
+For OpenAI speech or hands-free transcription, provide `OPENAI_API_KEY` in the
+environment or in `~/.config/parley/env`.
+
+For higher-quality speech, add an ElevenLabs key to the same file. In the
+default `auto` mode, its presence switches speech output to ElevenLabs while
+OpenAI remains available for hands-free transcription:
+
+```sh
+ELEVENLABS_API_KEY=...
+OPENAI_API_KEY=sk-...        # still needed only if you use voice input
+```
+
+Parley starts with ElevenLabs' George voice and `eleven_v3`. Run
+`parley voices` after adding the key to see the voices in your account, then
+set `PARLEY_ELEVENLABS_VOICE_ID` to the one you want. Set
+`PARLEY_TTS_PROVIDER=openai` at any time to keep using OpenAI for speech.
 
 macOS only for now — playback uses `afplay`. `ffmpeg` is optional; without it
 you lose only the Bluetooth warm-up described below.
@@ -72,7 +86,7 @@ parley say "Tests are green, deploying now."
 parley say --voice nova "Heads up, that migration looks wrong."
 parley say --wait "..."   # block until spoken
 
-parley voices             # audition all eleven voices
+parley voices             # audition OpenAI voices, or list ElevenLabs voices
 parley stop               # drop the queue, silence everything
 parley default on         # new sessions start speaking
 ```
@@ -136,9 +150,12 @@ Every knob is an environment variable.
 
 | Variable | Default | Notes |
 |---|---|---|
+| `PARLEY_TTS_PROVIDER` | `auto` | `auto`, `openai`, or `elevenlabs`; auto prefers ElevenLabs when its key exists |
 | `PARLEY_VOICE` | `fable` | one of the eleven OpenAI voices |
 | `PARLEY_MODEL` | `gpt-4o-mini-tts-2025-12-15` | falls back if retired |
-| `PARLEY_SPEED` | `1.2` | |
+| `PARLEY_ELEVENLABS_VOICE_ID` | George | ElevenLabs voice ID; `parley voices` lists yours |
+| `PARLEY_ELEVENLABS_MODEL` | `eleven_v3` | ElevenLabs text-to-speech model |
+| `PARLEY_SPEED` | `1.2` | OpenAI speech speed |
 | `PARLEY_INSTRUCTIONS` | conversational | delivery notes for `gpt-*` models |
 | `PARLEY_MAX_CHARS` | `3000` | caps a single utterance |
 | `PARLEY_SESSION_NAME` | tmux session name | spoken before every automatic reply |

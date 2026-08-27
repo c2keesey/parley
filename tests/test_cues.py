@@ -105,3 +105,10 @@ def test_a_sound_file_can_replace_a_generated_cue(tmp_path, monkeypatch):
 def test_a_missing_override_falls_back_to_the_generated_cue(monkeypatch):
     monkeypatch.setenv("PARLEY_CUE_WAKE", "/nope/does-not-exist.wav")
     assert cues.override("wake") is None
+
+
+@pytest.mark.parametrize("name", ["wake", "send"])
+def test_custom_bundled_earcons_match_the_current_patterns(name):
+    generated = cues.build(name)
+    shipped = cues.SOUNDS / f"{name}.wav"
+    assert shipped.read_bytes() == generated.read_bytes()

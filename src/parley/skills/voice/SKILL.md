@@ -18,3 +18,8 @@ While voice is on:
 For hands-free input, `parley listen on` from inside tmux. The user says
 "okay computer", speaks, then "send it", and the message is typed into the
 session. "scrap that" discards a message in progress.
+
+Parley automatically uses ElevenLabs speech when `ELEVENLABS_API_KEY` is in
+`~/.config/parley/env`. `parley voices` then lists available voice IDs; set
+`PARLEY_ELEVENLABS_VOICE_ID` in the environment to choose one. Never ask the
+user to paste an API key into chat.
