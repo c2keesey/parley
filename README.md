@@ -123,6 +123,10 @@ not discard ordinary dictation such as "scratch that migration." Change the
 wake, send, and original cancel phrases with `PARLEY_WAKE`, `PARLEY_SEND`, and
 `PARLEY_CANCEL`.
 
+The local recognizer is biased toward these control phrases and accepts the
+demonstrated standalone tiny-Whisper rendering `Sunday` as `send it`; the
+fallback never matches `Sunday` inside ordinary dictation.
+
 If you say **"okay computer"** again while dictating, the wake tone plays again
 as an audible confirmation that capture is still active. Parley keeps
 listening and removes the repeated wake phrase from the message it sends.

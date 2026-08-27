@@ -5,6 +5,7 @@ from parley.listen import (
     contains_phrase,
     contains_wake,
     is_cancel,
+    is_send,
     is_stop_talking,
     rms,
     strip_phrase,
@@ -88,6 +89,26 @@ def test_send_phrase_is_stripped_from_the_message():
 
 def test_send_phrase_is_only_stripped_from_the_end():
     assert strip_phrase("send it to staging", "send it") == "send it to staging"
+
+
+@pytest.mark.parametrize("heard", [
+    "send it",
+    "Send it.",
+    "finish this and send it now",
+    "Sunday.",
+])
+def test_send_command_tolerates_the_observed_local_asr_variant(heard):
+    assert is_send(heard)
+
+
+@pytest.mark.parametrize("heard", [
+    "deploy on Sunday",
+    "Sunday is the maintenance window",
+    "send",
+    "send this",
+])
+def test_send_fallback_does_not_submit_ordinary_dictation(heard):
+    assert not is_send(heard)
 
 
 def test_silence_reads_as_silence():
@@ -254,6 +275,94 @@ def test_other_wake_input_keeps_normal_dictation_flow(tmp_path, monkeypatch):
     listen.run()
 
     assert sent == ["run the tests"]
+
+
+def test_sunday_asr_variant_submits_and_releases_microphone_turn(
+        tmp_path, monkeypatch):
+    actions = []
+    sent = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"wake"], False),
+        ([b"message"], False),
+        ([b"send"], False),
+    ]))
+    heard = iter(["okay computer", "run the real path", "Sunday."])
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+    monkeypatch.setattr(
+        listen, "transcribe_cloud",
+        lambda frames: "okay computer run the real path send it",
+    )
+    monkeypatch.setattr(listen, "inject", lambda text: sent.append(text))
+    monkeypatch.setattr(listen.player, "pause", lambda: actions.append("pause"))
+    monkeypatch.setattr(listen.player, "resume", lambda: actions.append("resume"))
+    monkeypatch.setattr(listen, "cue", lambda kind: actions.append(kind))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert sent == ["run the real path"]
+    assert actions == ["pause", "wake", "send", "resume"]
+
+
+def test_local_whisper_is_biased_toward_control_phrases(tmp_path, monkeypatch):
+    model = tmp_path / "tiny.bin"
+    model.write_bytes(b"model")
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return listen.subprocess.CompletedProcess(command, 0, stdout="Send it.")
+
+    monkeypatch.setattr(listen, "TINY", model)
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/opt/whisper-cli")
+    monkeypatch.setattr(listen.subprocess, "run", run)
+
+    assert listen.transcribe_local([b"\x00\x00"] * 10) == "Send it."
+    prompt_index = commands[0].index("--prompt") + 1
+    assert "send it" in commands[0][prompt_index].lower()
+
+
+def test_tmux_submission_checks_typing_and_enter(monkeypatch):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return listen.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(listen, "get_target", lambda: "%42")
+    monkeypatch.setattr(listen.subprocess, "run", run)
+    monkeypatch.setattr(listen.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    assert listen.inject("run the tests")
+    assert calls == [
+        ["tmux", "send-keys", "-t", "%42", "-l", "run the tests"],
+        ["tmux", "send-keys", "-t", "%42", "Enter"],
+    ]
+
+
+@pytest.mark.parametrize("failure", [0, 1])
+def test_tmux_submission_reports_each_failure_without_claiming_success(
+        failure, monkeypatch):
+    calls = []
+    logs = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return listen.subprocess.CompletedProcess(
+            command, 1 if len(calls) - 1 == failure else 0)
+
+    monkeypatch.setattr(listen, "get_target", lambda: "%42")
+    monkeypatch.setattr(listen.subprocess, "run", run)
+    monkeypatch.setattr(listen.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(listen.config, "log", lambda message: logs.append(message))
+
+    assert not listen.inject("run the tests")
+    assert logs[-1].startswith("submission failed:")
 
 
 def test_wake_rechecks_just_starting_playback_and_barges_in(

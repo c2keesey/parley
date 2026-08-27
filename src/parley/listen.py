@@ -48,6 +48,11 @@ SEND = os.environ.get("PARLEY_SEND", "send it")
 CANCEL = os.environ.get("PARLEY_CANCEL", "scrap that")
 CANCEL_ALIASES = tuple(dict.fromkeys((CANCEL, "scratch that")))
 STOP_TALKING = os.environ.get("PARLEY_STOP_TALKING", "stop talking")
+LOCAL_PROMPT = os.environ.get(
+    "PARLEY_LOCAL_PROMPT",
+    f"Voice commands: {WAKE}. {SEND}. {CANCEL}. scratch that. "
+    f"{STOP_TALKING}.",
+)
 
 MODEL_DIR = Path(os.environ.get(
     "PARLEY_WHISPER_MODELS", Path.home() / ".cache" / "parley"))
@@ -178,6 +183,16 @@ def is_cancel(text):
     return False
 
 
+def is_send(text):
+    """Recognise the configured command and one demonstrated tiny-ASR miss."""
+    if contains_phrase(text, SEND):
+        return True
+    # Chris's isolated "send it" has repeatedly been rendered as "Sunday" by
+    # tiny.en. Bound this phonetic fallback to the whole burst so ordinary
+    # dictation such as "deploy on Sunday" cannot submit the message.
+    return normalize(SEND) == ["send", "it"] and normalize(text) == ["sunday"]
+
+
 def is_stop_talking(text, overlapped):
     """Recognise a narrow set of local-ASR variants only during playback."""
     if not overlapped:
@@ -256,7 +271,7 @@ def transcribe_local(frames):
         try:
             result = subprocess.run(
                 [binary, "-m", str(TINY), "-f", str(wav),
-                 "-nt", "-np", "-t", "4"],
+                 "-nt", "-np", "-t", "4", "--prompt", LOCAL_PROMPT],
                 capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             return ""
@@ -338,10 +353,22 @@ def inject(text):
     pane = get_target()
     if not pane or not text:
         return False
-    subprocess.run(["tmux", "send-keys", "-t", pane, "-l", text], check=False)
+    typed = subprocess.run(
+        ["tmux", "send-keys", "-t", pane, "-l", text],
+        capture_output=True, text=True, check=False,
+    )
+    if typed.returncode != 0:
+        config.log(f"submission failed: could not type into {pane}")
+        return False
     time.sleep(0.15)
-    subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"], check=False)
-    config.log(f"injected into {pane}: {text[:80]!r}")
+    submitted = subprocess.run(
+        ["tmux", "send-keys", "-t", pane, "Enter"],
+        capture_output=True, text=True, check=False,
+    )
+    if submitted.returncode != 0:
+        config.log(f"submission failed: could not press Enter in {pane}")
+        return False
+    config.log(f"submitted to {pane}: {text[:80]!r}")
     return True
 
 
@@ -503,7 +530,9 @@ def run(device="0"):
                 capturing, captured = True, list(burst)
                 started = last_heard = now
                 cue("wake")
-                if contains_phrase(heard, SEND):
+                if is_send(heard):
+                    if not contains_phrase(heard, SEND):
+                        config.log(f"send alias recognized: {heard!r}")
                     capturing, captured = False, []
                     finish(list(burst))
                 continue
@@ -521,8 +550,10 @@ def run(device="0"):
 
             last_heard = now
             captured.extend(burst)
-            if not contains_phrase(heard, SEND):
+            if not is_send(heard):
                 continue
+            if not contains_phrase(heard, SEND):
+                config.log(f"send alias recognized: {heard!r}")
             capturing = False
             frames, captured = captured, []
             finish(frames)
