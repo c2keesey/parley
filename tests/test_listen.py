@@ -95,9 +95,8 @@ def test_send_phrase_is_only_stripped_from_the_end():
     "send it",
     "Send it.",
     "finish this and send it",
-    "Sunday.",
 ])
-def test_send_command_tolerates_the_observed_local_asr_variant(heard):
+def test_send_command_must_be_trailing(heard):
     assert is_send(heard)
 
 
@@ -107,10 +106,11 @@ def test_send_command_tolerates_the_observed_local_asr_variant(heard):
     "finish this and send it now",
     "the send it command is not always going through",
     "I said send it in the middle and kept talking",
+    "Sunday.",
     "send",
     "send this",
 ])
-def test_send_fallback_does_not_submit_ordinary_dictation(heard):
+def test_ordinary_dictation_does_not_submit(heard):
     assert not is_send(heard)
 
 
@@ -124,6 +124,52 @@ def test_loud_audio_reads_as_loud():
 
 def test_short_chunk_is_not_an_error():
     assert rms(b"\x00") == 0
+
+
+class FakeAudioStream:
+    def __init__(self, chunks):
+        self.chunks = iter(chunks)
+
+    def read(self, size):
+        return next(self.chunks, b"")
+
+
+class FakeAudioProcess:
+    def __init__(self, chunks):
+        self.stdout = FakeAudioStream(chunks)
+
+    def terminate(self):
+        pass
+
+
+def audio_chunks(voiced_frames):
+    loud = b"\xff\x7f" * listen.FRAME
+    quiet = b"\x00\x00" * listen.FRAME
+    silence_frames = int(listen.END_SILENCE * listen.RATE / listen.FRAME) + 1
+    return [loud] * voiced_frames + [quiet] * silence_frames
+
+
+def test_fast_command_sized_burst_reaches_local_recognition(monkeypatch):
+    process = FakeAudioProcess(audio_chunks(4))
+    monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(listen, "speaking", lambda: False)
+
+    actual = [burst for burst, _ in listen.bursts() if burst is not None]
+
+    assert len(actual) == 1
+
+
+def test_click_sized_burst_remains_below_speech_gate(monkeypatch):
+    process = FakeAudioProcess(audio_chunks(2))
+    logs = []
+    monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(listen, "speaking", lambda: False)
+    monkeypatch.setattr(listen.config, "log", logs.append)
+
+    actual = [burst for burst, _ in listen.bursts() if burst is not None]
+
+    assert actual == []
+    assert logs == ["gate ignored short audio voiced=0.13s"]
 
 
 @pytest.mark.parametrize("heard", [
@@ -280,7 +326,7 @@ def test_other_wake_input_keeps_normal_dictation_flow(tmp_path, monkeypatch):
     assert sent == ["run the tests"]
 
 
-def test_sunday_asr_variant_submits_and_releases_microphone_turn(
+def test_trailing_send_command_submits_and_releases_microphone_turn(
         tmp_path, monkeypatch):
     actions = []
     sent = []
@@ -293,7 +339,7 @@ def test_sunday_asr_variant_submits_and_releases_microphone_turn(
         ([b"message"], False),
         ([b"send"], False),
     ]))
-    heard = iter(["okay computer", "run the real path", "Sunday."])
+    heard = iter(["okay computer", "run the real path", "send it."])
     monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
     monkeypatch.setattr(
         listen, "transcribe_cloud",
@@ -309,6 +355,23 @@ def test_sunday_asr_variant_submits_and_releases_microphone_turn(
 
     assert sent == ["run the real path"]
     assert actions == ["pause", "wake", "send", "resume"]
+
+
+def test_empty_local_transcription_is_identifiable_in_listener_log(
+        tmp_path, monkeypatch):
+    logs = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(
+        listen, "bursts", lambda device: iter([([b"audio"] * 7, False)]))
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: "")
+    monkeypatch.setattr(listen.config, "log", logs.append)
+
+    listen.run()
+
+    assert "local transcription empty frames=7" in logs
 
 
 def test_send_it_inside_content_does_not_end_capture_or_get_removed(
@@ -329,7 +392,7 @@ def test_send_it_inside_content_does_not_end_capture_or_get_removed(
         "okay computer",
         "I said send it in the middle and kept talking",
         "so this content must still be captured",
-        "Sunday.",
+        "send it.",
     ])
     monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
     monkeypatch.setattr(

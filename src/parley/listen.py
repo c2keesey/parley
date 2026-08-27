@@ -34,7 +34,7 @@ from parley import config, cues, indicator, player
 RATE = 16000
 FRAME = 1024
 SPEECH_RMS = int(os.environ.get("PARLEY_MIC_THRESHOLD", "500"))
-MIN_SPEECH = 0.35        # seconds of sound before a burst counts as speech
+MIN_SPEECH = float(os.environ.get("PARLEY_MIN_SPEECH", "0.16"))
 END_SILENCE = 0.7        # seconds of quiet that ends a burst
 INTERRUPT_SILENCE = 0.25 # quicker burst completion while speech is playing
 MAX_BURST = 15.0         # hard cap on a single burst
@@ -184,14 +184,12 @@ def is_cancel(text):
 
 
 def is_send(text):
-    """Recognise a trailing command and one demonstrated tiny-ASR miss."""
+    """Recognise the configured phrase only when it trails the utterance."""
     words, target = normalize(text), normalize(SEND)
-    if target and len(words) >= len(target) and words[-len(target):] == target:
-        return True
-    # Chris's isolated "send it" has repeatedly been rendered as "Sunday" by
-    # tiny.en. Bound this phonetic fallback to the whole burst so ordinary
-    # dictation such as "deploy on Sunday" cannot submit the message.
-    return target == ["send", "it"] and words == ["sunday"]
+    return bool(
+        target and len(words) >= len(target)
+        and words[-len(target):] == target
+    )
 
 
 def is_stop_talking(text, overlapped):
@@ -424,6 +422,9 @@ def bursts(device="0"):
                 if quiet >= end_silence or voiced >= MAX_BURST:
                     if voiced >= MIN_SPEECH:
                         yield buffer, overlapped
+                    elif voiced >= 0.10:
+                        config.log(
+                            f"gate ignored short audio voiced={voiced:.2f}s")
                     buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
     finally:
         process.terminate()
@@ -499,6 +500,7 @@ def run(device="0"):
 
             heard = transcribe_local(burst)
             if not heard:
+                config.log(f"local transcription empty frames={len(burst)}")
                 continue
             config.log(f"heard {heard[:80]!r} capturing={capturing} "
                        f"overlapped={overlapped}")
@@ -532,8 +534,6 @@ def run(device="0"):
                 started = last_heard = now
                 cue("wake")
                 if is_send(heard):
-                    if not contains_phrase(heard, SEND):
-                        config.log(f"send alias recognized: {heard!r}")
                     capturing, captured = False, []
                     finish(list(burst))
                 continue
@@ -553,8 +553,6 @@ def run(device="0"):
             captured.extend(burst)
             if not is_send(heard):
                 continue
-            if not contains_phrase(heard, SEND):
-                config.log(f"send alias recognized: {heard!r}")
             capturing = False
             frames, captured = captured, []
             finish(frames)

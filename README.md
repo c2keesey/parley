@@ -123,10 +123,10 @@ not discard ordinary dictation such as "scratch that migration." Change the
 wake, send, and original cancel phrases with `PARLEY_WAKE`, `PARLEY_SEND`, and
 `PARLEY_CANCEL`.
 
-The local recognizer is biased toward these control phrases. `send it` ends
-capture only when it is trailing, so the same words inside message content are
-preserved. Parley also accepts the demonstrated standalone tiny-Whisper
-rendering `Sunday`; that fallback never matches inside ordinary dictation.
+The local recognizer is biased toward these control phrases, and the audio gate
+is tuned to retain fast command-sized utterances. `send it` ends capture only
+when it is trailing, so the same words inside message content are preserved;
+ordinary dictation such as `Sunday` never submits a message.
 
 If you say **"okay computer"** again while dictating, the wake tone plays again
 as an audible confirmation that capture is still active. Parley keeps
