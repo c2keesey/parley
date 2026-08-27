@@ -249,6 +249,36 @@ def test_other_wake_input_keeps_normal_dictation_flow(tmp_path, monkeypatch):
     assert sent == ["run the tests"]
 
 
+def test_wake_rechecks_just_starting_playback_and_barges_in(
+        tmp_path, monkeypatch):
+    actions = []
+    sent = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"wake"], False),
+        ([b"message"], True),
+    ]))
+    heard = iter(["okay computer", "talk to me send it"])
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+    monkeypatch.setattr(listen, "speaking", lambda: True)
+    monkeypatch.setattr(listen.player, "stop", lambda: actions.append("stopped"))
+    monkeypatch.setattr(
+        listen, "transcribe_cloud",
+        lambda frames: "okay computer talk to me send it",
+    )
+    monkeypatch.setattr(listen, "inject", lambda text: sent.append(text))
+    monkeypatch.setattr(listen, "cue", lambda kind: actions.append(kind))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert actions == ["stopped", "wake", "send"]
+    assert sent == ["talk to me"]
+
+
 def test_repeated_wake_replays_tone_keeps_listening_and_is_not_sent(
         tmp_path, monkeypatch):
     cues = []

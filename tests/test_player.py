@@ -11,6 +11,7 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "QUEUE", tmp_path / "queue")
     monkeypatch.setattr(config, "LOCK", tmp_path / "player.lock")
     monkeypatch.setattr(config, "PIDFILE", tmp_path / "playing.pid")
+    monkeypatch.setattr(config, "DRAIN_PID", tmp_path / "drainer.pid")
     monkeypatch.setattr(config, "LOG", tmp_path / "speak.log")
     monkeypatch.setattr(config, "INTERRUPT", tmp_path / "interrupt")
 
@@ -20,7 +21,7 @@ def recorder(monkeypatch):
     """Capture play order and assert no two players ever run at once."""
     played, live = [], []
 
-    def fake_play(audio):
+    def fake_play(audio, interrupt=None):
         live.append(1)
         assert len(live) == 1, "two players ran at the same time"
         played.append(audio.decode())
@@ -55,7 +56,7 @@ def test_only_one_drainer_wins_the_lock(monkeypatch):
     monkeypatch.setattr(player, "_wake_output", lambda: None)
     holder_got_lock = []
 
-    def slow_play(audio):
+    def slow_play(audio, interrupt=None):
         # While this drainer is busy, a second must decline rather than queue up.
         holder_got_lock.append(player.drain())
 
@@ -96,7 +97,7 @@ def test_interrupting_playback_suppresses_the_done_chime(monkeypatch):
     chimed = []
     monkeypatch.setattr(player, "synthesize", lambda text, v, m, p: b"audio")
     monkeypatch.setattr(player, "_wake_output", lambda: None)
-    monkeypatch.setattr(player, "play", lambda audio: player.stop())
+    monkeypatch.setattr(player, "play", lambda audio, interrupt=None: player.stop())
     monkeypatch.setattr(cues, "play", lambda name: chimed.append(name))
     player.enqueue("please stop me")
 
@@ -116,3 +117,98 @@ def test_stop_terminates_the_active_audio_process(monkeypatch):
 
     assert killed == [(4242, 15)]
     assert config.PIDFILE.read_text() == ""
+
+
+def test_drainer_is_active_during_synthesis_and_clears_marker(monkeypatch):
+    active_during_synthesis = []
+
+    def synthesize(text, voice, model, provider):
+        active_during_synthesis.append(player.active())
+        return b"audio"
+
+    monkeypatch.setattr(player, "synthesize", synthesize)
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(player, "play", lambda audio, interrupt=None: True)
+    player.enqueue("hello")
+
+    player.drain()
+
+    assert active_during_synthesis == [True]
+    assert not config.DRAIN_PID.exists()
+    assert not player.active()
+
+
+def test_interrupt_during_synthesis_prevents_audio_from_starting(monkeypatch):
+    from parley import cues
+
+    def synthesize(text, voice, model, provider):
+        player.stop()
+        return b"audio that must not play"
+
+    monkeypatch.setattr(player, "synthesize", synthesize)
+    monkeypatch.setattr(
+        player, "_wake_output",
+        lambda: pytest.fail("interrupted speech must not warm output"),
+    )
+    monkeypatch.setattr(
+        player, "play", lambda audio, interrupt=None: pytest.fail(
+            "interrupted speech must not play"),
+    )
+    monkeypatch.setattr(
+        cues, "play", lambda name: pytest.fail("interruption must not chime"),
+    )
+    player.enqueue("interrupt me while synthesizing")
+
+    player.drain()
+
+    assert not config.DRAIN_PID.exists()
+
+
+def test_interrupt_during_output_warmup_prevents_audio_from_starting(monkeypatch):
+    from parley import cues
+
+    monkeypatch.setattr(
+        player, "synthesize", lambda text, voice, model, provider: b"audio")
+    monkeypatch.setattr(player, "_wake_output", lambda: player.stop())
+    monkeypatch.setattr(
+        player, "play", lambda audio, interrupt=None: pytest.fail(
+            "speech interrupted during warm-up must not play"),
+    )
+    monkeypatch.setattr(
+        cues, "play", lambda name: pytest.fail("interruption must not chime"),
+    )
+    player.enqueue("interrupt me during warm-up")
+
+    player.drain()
+
+    assert not config.DRAIN_PID.exists()
+
+
+def test_pending_queue_counts_as_active_before_drainer_starts():
+    player.enqueue("not draining yet")
+    assert player.active()
+
+
+def test_interrupt_in_audio_launch_window_terminates_new_process(monkeypatch):
+    terminated = []
+
+    class Process:
+        pid = 4242
+
+        def __init__(self):
+            player.stop()
+
+        def terminate(self):
+            terminated.append(self.pid)
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(
+        player.subprocess, "Popen", lambda *args, **kwargs: Process())
+    interrupt = player._interrupt_token()
+
+    played = player.play(b"audio", interrupt)
+
+    assert played is False
+    assert terminated == [4242]

@@ -51,7 +51,7 @@ def _wake_output():
         subprocess.run(["afplay", str(config.SILENCE)], capture_output=True)
 
 
-def play(audio):
+def play(audio, interrupt=None):
     config.STATE.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         suffix=".mp3", delete=False, dir=config.STATE
@@ -59,10 +59,17 @@ def play(audio):
         fh.write(audio)
         path = fh.name
     try:
+        if interrupt is not None and _interrupt_token() != interrupt:
+            return False
         proc = subprocess.Popen(["afplay", path])
         with open(config.PIDFILE, "a") as fh:
             fh.write(f"{proc.pid}\n")
+        # Close the last race between the pre-launch token check and afplay
+        # publishing its pid. An interrupt in that window stops it here.
+        if interrupt is not None and _interrupt_token() != interrupt:
+            proc.terminate()
         proc.wait()
+        return interrupt is None or _interrupt_token() == interrupt
     finally:
         try:
             os.unlink(path)
@@ -82,6 +89,20 @@ def _interrupt_token():
         return ""
 
 
+def _pid_alive(path):
+    try:
+        pid = int(path.read_text().strip())
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def active():
+    """True from queued/synthesizing speech through the end of playback."""
+    return bool(_pending()) or _pid_alive(config.DRAIN_PID)
+
+
 def drain():
     """Play everything queued, in order. Returns immediately if already draining."""
     config.STATE.mkdir(parents=True, exist_ok=True)
@@ -94,6 +115,7 @@ def drain():
     woke = False
     spoke = False
     interrupt = _interrupt_token()
+    config.DRAIN_PID.write_text(str(os.getpid()))
     try:
         while True:
             items = _pending()
@@ -127,16 +149,27 @@ def drain():
                     f"spoke {job.get('voice')} {len(job['text'])}c "
                     f"synth={time.time() - started:.1f}s {len(audio)}b"
                 )
+                if _interrupt_token() != interrupt:
+                    config.log("speech interrupted before playback")
+                    return True
                 if not woke:
                     _wake_output()
                     woke = True
-                play(audio)
+                if _interrupt_token() != interrupt:
+                    config.log("speech interrupted during output warm-up")
+                    return True
+                play(audio, interrupt)
                 if _interrupt_token() != interrupt:
                     return True
                 spoke = True
             except Exception as exc:
                 config.log(f"error: {exc}")
     finally:
+        try:
+            if config.DRAIN_PID.read_text().strip() == str(os.getpid()):
+                config.DRAIN_PID.unlink(missing_ok=True)
+        except OSError:
+            pass
         try:
             fcntl.flock(lock, fcntl.LOCK_UN)
             lock.close()

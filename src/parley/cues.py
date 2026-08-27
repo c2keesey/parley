@@ -13,9 +13,10 @@ Tuned to published earcon guidance rather than taste:
   - Match loudness across the set so no one cue jumps out.
 
 The wake and send tones are generated from the patterns below and shipped so
-the exact new sound is immediate after install. The done and cancel cues remain
-from Kenney's CC0 interface packs. To use your own sound pack instead, point
-PARLEY_CUE_<NAME> at a wav or mp3 file.
+the exact new sound is immediate after install. Done is a single soft pulse
+from Kenney's CC0 interface pack. Cancel uses the generated darker falling
+tone; the old bundled cancel asset was a misleading rapid multi-click. To use
+your own sound pack instead, point PARLEY_CUE_<NAME> at a wav or mp3 file.
 
 Cues register with the player's pid file, so the listener treats them as
 "the agent is making noise" and will not try to transcribe them.
@@ -46,6 +47,7 @@ PATTERNS = {
 
 
 SOUNDS = Path(__file__).parent / "sounds"
+BUNDLED_NAMES = {"wake", "send", "done"}
 
 
 def override(name):
@@ -57,11 +59,10 @@ def override(name):
 def bundled(name):
     """The shipped sound for this cue.
 
-    Wake and send are Parley's quiet generated earcons. Done and cancel are
-    from Kenney's CC0 interface packs. The synthesizer remains as a fallback
-    if an asset is missing.
+    Wake and send are Parley's quiet generated earcons. Done is from Kenney's
+    CC0 interface pack. Cancel deliberately uses the generated falling tone.
     """
-    if os.environ.get("PARLEY_SYNTH_CUES"):
+    if os.environ.get("PARLEY_SYNTH_CUES") or name not in BUNDLED_NAMES:
         return None
     path = SOUNDS / f"{name}.wav"
     return str(path) if path.exists() else None
@@ -107,15 +108,19 @@ def build(name):
 
 
 def play(name, wait=True):
-    path = override(name) or bundled(name) or build(name)
+    custom = override(name)
+    shipped = bundled(name)
+    path = custom or shipped or build(name)
     if not path:
         return
+    source = "override" if custom else "bundled" if shipped else "generated"
     try:
         proc = subprocess.Popen(["afplay", str(path)],
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)
     except OSError:
         return
+    config.log(f"cue {name} source={source} wait={str(wait).lower()}")
     # Registered so the listener knows this noise is ours and ignores it.
     try:
         with open(config.PIDFILE, "a") as fh:

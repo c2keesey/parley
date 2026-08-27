@@ -127,6 +127,11 @@ If you say **"okay computer"** again while dictating, the wake tone plays again
 as an audible confirmation that capture is still active. Parley keeps
 listening and removes the repeated wake phrase from the message it sends.
 
+The cue meanings are deliberately distinct: one warm tone means capture is
+open, a soft rising pair means the message was sent, one quiet dot means speech
+playback finished, and a darker falling pair means capture was discarded or
+expired. Each played cue is logged by name and source in `~/.parley/speak.log`.
+
 While Parley is speaking, **"okay computer, stop talking"** is a dedicated
 local voice-control command. It immediately silences playback, clears queued
 speech, makes no confirmation sound, and is never transcribed or sent as chat.

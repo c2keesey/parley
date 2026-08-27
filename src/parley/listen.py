@@ -298,7 +298,9 @@ def transcribe_cloud(frames):
 
 
 def speaking():
-    """True while a player is running, so overlapping speech can be flagged."""
+    """True while speech is queued, synthesizing, warming up, or playing."""
+    if player.active():
+        return True
     try:
         pids = config.PIDFILE.read_text().split()
     except OSError:
@@ -480,9 +482,13 @@ def run(device="0"):
                 # Barge-in: if this landed over the agent's own speech, stop it
                 # talking. Requiring the wake phrase is what makes overlapping
                 # audio safe to act on.
-                if overlapped:
+                # The burst tag reflects whether playback was active while its
+                # frames arrived. Recheck now as well: synthesis can finish and
+                # playback can start while local transcription is running.
+                if overlapped or speaking():
                     player.stop()
-                    config.log("barged in")
+                    config.log(
+                        "barged in: stopped active or pending playback")
                 # Keep this burst — you normally keep talking in the same breath
                 # as the wake phrase. strip_leading drops everything up to and
                 # including it, which also removes any of the agent's words.

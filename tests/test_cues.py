@@ -9,6 +9,7 @@ from parley import config, cues
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE", tmp_path)
     monkeypatch.setattr(config, "PIDFILE", tmp_path / "playing.pid")
+    monkeypatch.setattr(config, "LOG", tmp_path / "speak.log")
 
 
 @pytest.mark.parametrize("name", sorted(cues.PATTERNS))
@@ -105,6 +106,28 @@ def test_a_sound_file_can_replace_a_generated_cue(tmp_path, monkeypatch):
 def test_a_missing_override_falls_back_to_the_generated_cue(monkeypatch):
     monkeypatch.setenv("PARLEY_CUE_WAKE", "/nope/does-not-exist.wav")
     assert cues.override("wake") is None
+
+
+def test_cancel_uses_distinct_generated_falling_tone():
+    assert cues.bundled("cancel") is None
+    assert cues.build("cancel") == config.STATE / "cue-cancel.wav"
+
+
+def test_play_logs_semantic_cue_name_and_safe_source(monkeypatch):
+    class Process:
+        pid = 4242
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(cues.subprocess, "Popen", lambda *args, **kwargs: Process())
+
+    cues.play("wake")
+    cues.play("cancel")
+
+    log = config.LOG.read_text()
+    assert "cue wake source=bundled wait=true" in log
+    assert "cue cancel source=generated wait=true" in log
 
 
 @pytest.mark.parametrize("name", ["wake", "send"])
