@@ -3,6 +3,12 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
+## 0.5.1 - 2026-08-27
+
+- Fixed personalized trigger enrollment restarting hands-free input on a stale
+  session instead of the tmux pane where enrollment was run.
+- Renamed the bundled agent skill from `voice` to `parley`.
+
 ## 0.5.0 - 2026-08-26
 
 - Added optional private, local personalized trigger enrollment.

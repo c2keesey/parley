@@ -43,13 +43,13 @@ The distribution is named `parley-voice` because the `parley` name on PyPI
 belongs to an unrelated project. The installed command remains `parley`.
 Source installation is the supported path until the first PyPI release.
 
-`parley install` writes a `Stop` hook and the `voice` skill into each agent
+`parley install` writes a `Stop` hook and the `parley` skill into each agent
 present on the machine:
 
 | Agent | Hook | Skill |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | `~/.claude/skills/voice/` |
-| Codex | `~/.codex/hooks.json` | `~/.codex/skills/voice/` |
+| Claude Code | `~/.claude/settings.json` | `~/.claude/skills/parley/` |
+| Codex | `~/.codex/hooks.json` | `~/.codex/skills/parley/` |
 
 It is idempotent, leaves any hooks you already have alone, and backs up the
 settings file before writing. Pass `--harness claude-code` or `--harness codex`

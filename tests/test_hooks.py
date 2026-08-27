@@ -14,6 +14,10 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEFAULT", tmp_path / "default")
     monkeypatch.setattr(hooks, "TARGETS", {"claude-code": tmp_path / "settings.json",
                                            "codex": tmp_path / "hooks.json"})
+    monkeypatch.setattr(hooks, "SKILL_DIRS", {
+        "claude-code": tmp_path / "claude-skills",
+        "codex": tmp_path / "codex-skills",
+    })
     for var in hooks.SESSION_VARS + ("TMUX_PANE",):
         monkeypatch.delenv(var, raising=False)
 
@@ -97,6 +101,14 @@ def test_install_is_idempotent(monkeypatch):
     path.write_text(json.dumps({"hooks": {}}))
     assert hooks.install("claude-code") == ["claude-code"]
     assert hooks.install("claude-code") == []
+
+
+def test_install_uses_parley_skill_name():
+    hooks.install_skill("codex")
+    skill = hooks.SKILL_DIRS["codex"] / "parley" / "SKILL.md"
+    assert skill.exists()
+    assert "name: parley" in skill.read_text()
+    assert not (hooks.SKILL_DIRS["codex"] / "voice").exists()
 
 
 def test_install_leaves_existing_hooks_alone():

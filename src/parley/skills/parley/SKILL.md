@@ -1,6 +1,6 @@
 ---
-name: voice
-description: Turn two-way voice on or off for this session — replies read aloud, and hands-free dictation back. Use when the user says "voice on", "voice off", "talk to me", "read that aloud", "turn on voice mode", "stop talking", or invokes /voice.
+name: parley
+description: Turn Parley's two-way voice on or off for this session — replies read aloud, and hands-free dictation back. Use when the user says "voice on", "voice off", "Parley on", "Parley off", "talk to me", "read that aloud", "turn on voice mode", "stop talking", or invokes /parley.
 ---
 
 Run `parley on` to start, `parley off` to stop. `parley status` reports the

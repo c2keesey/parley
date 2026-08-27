@@ -226,13 +226,13 @@ SKILL_DIRS = {
 
 
 def install_skill(harness=None):
-    """Copy the voice skill in, so the agent can be told to turn voice on.
+    """Copy the Parley skill in, so the agent can be told to turn voice on.
 
     A skill rather than a session-start hook: voice gets switched on and off
     mid-session, and only the sessions that asked for it should carry the
     instructions.
     """
-    source = Path(__file__).parent / "skills" / "voice" / "SKILL.md"
+    source = Path(__file__).parent / "skills" / "parley" / "SKILL.md"
     if not source.exists():
         return []
     installed = []
@@ -241,7 +241,7 @@ def install_skill(harness=None):
             continue
         if not harness and not root.parent.exists():
             continue
-        destination = root / "voice" / "SKILL.md"
+        destination = root / "parley" / "SKILL.md"
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
         installed.append(name)

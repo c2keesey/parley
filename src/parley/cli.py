@@ -174,7 +174,11 @@ def main(argv=None):
         from parley import triggers
 
         was_running = bool(listener.is_running())
-        pane = listener.get_target()
+        previous_pane = listener.get_target()
+        # Enrollment is interactive and belongs to the pane that invoked it.
+        # Prefer that pane over a still-live but stale listener target left by
+        # another session. Outside tmux, preserve the previous target.
+        pane = os.environ.get("TMUX_PANE", "") or previous_pane
         if was_running:
             listener.stop()
             time.sleep(0.3)
@@ -189,6 +193,7 @@ def main(argv=None):
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, start_new_session=True)
                 time.sleep(0.6)
+                print(f"Listening restarted for pane {pane}.")
         print("Personalized triggers: active")
         for name, threshold in metadata["thresholds"].items():
             print(f"  {name}: threshold {threshold:.3f}")
