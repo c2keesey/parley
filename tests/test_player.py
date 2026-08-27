@@ -270,6 +270,8 @@ def test_pause_preserves_queue_and_resume_keeps_interrupt_token(monkeypatch):
 
 
 def test_new_speech_waits_for_exclusive_microphone_turn(monkeypatch):
+    from parley import cues
+
     synthesized = threading.Event()
     played = threading.Event()
 
@@ -279,6 +281,7 @@ def test_new_speech_waits_for_exclusive_microphone_turn(monkeypatch):
 
     monkeypatch.setattr(player, "synthesize", synthesize)
     monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(cues, "play", lambda name: None)
     monkeypatch.setattr(
         player, "play", lambda audio, interrupt=None: played.set())
     player.pause()

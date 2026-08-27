@@ -79,7 +79,7 @@ ELEVENLABS_API_KEY=...
 OPENAI_API_KEY=sk-...        # optional cloud fallback and transcription
 ```
 
-Parley starts with ElevenLabs' George voice and `eleven_v3`. Run
+Parley starts with ElevenLabs' George voice and `eleven_v3_conversational`. Run
 `parley voices` after adding the key to see the voices in your account, then
 set `PARLEY_ELEVENLABS_VOICE_ID` to the one you want. Set
 `PARLEY_TTS_PROVIDER=openai` at any time to keep using OpenAI for speech.
@@ -224,7 +224,7 @@ Every knob is an environment variable.
 | `PARLEY_MACOS_RATE` | `210` | local words per minute |
 | `PARLEY_MODEL` | `gpt-4o-mini-tts-2025-12-15` | falls back if retired |
 | `PARLEY_ELEVENLABS_VOICE_ID` | George | ElevenLabs voice ID; `parley voices` lists yours |
-| `PARLEY_ELEVENLABS_MODEL` | `eleven_v3` | ElevenLabs text-to-speech model |
+| `PARLEY_ELEVENLABS_MODEL` | `eleven_v3_conversational` | expressive, low-latency ElevenLabs text-to-speech model |
 | `PARLEY_ELEVENLABS_KEYCHAIN_SERVICE` | `parley-elevenlabs-api-key` | generic-password service used for secure key lookup |
 | `PARLEY_ELEVENLABS_KEYCHAIN_ACCOUNT` | current macOS user | generic-password account used for secure key lookup |
 | `PARLEY_SPEED` | `1.2` | OpenAI speech speed |

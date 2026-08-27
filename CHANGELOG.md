@@ -3,6 +3,11 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
+## 0.5.4 - 2026-08-27
+
+- Switched George's default ElevenLabs model to v3 Conversational for lower
+  latency and half the per-character API cost of regular v3.
+
 ## 0.5.3 - 2026-08-27
 
 - Kept spoken replies free of URLs, hyperlinks, and citation links so speech
