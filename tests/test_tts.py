@@ -1,6 +1,7 @@
 import io
 import json
 import urllib.error
+from types import SimpleNamespace
 
 import pytest
 
@@ -47,6 +48,49 @@ def test_shared_env_file_can_hold_both_provider_keys(tmp_path, monkeypatch):
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     assert config.api_key() == "openai-key"
     assert config.elevenlabs_api_key() == "eleven-key"
+
+
+def test_elevenlabs_key_falls_back_to_macos_keychain(monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.setattr(config, "KEY_FILES", [])
+    seen = []
+
+    def keychain(service, account):
+        seen.append((service, account))
+        return "keychain-key"
+
+    monkeypatch.setattr(config, "keychain_secret", keychain)
+    assert config.elevenlabs_api_key() == "keychain-key"
+    assert seen == [(config.ELEVENLABS_KEYCHAIN_SERVICE,
+                     config.ELEVENLABS_KEYCHAIN_ACCOUNT)]
+
+
+def test_environment_key_wins_without_touching_keychain(monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "environment-key")
+    monkeypatch.setattr(
+        config, "keychain_secret",
+        lambda service, account: pytest.fail("keychain should not be read"),
+    )
+    assert config.elevenlabs_api_key() == "environment-key"
+
+
+def test_keychain_lookup_never_places_the_secret_in_argv(monkeypatch):
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["kwargs"] = kwargs
+        return SimpleNamespace(returncode=0, stdout="secure-value\n")
+
+    monkeypatch.setattr(config.subprocess, "run", run)
+    config.keychain_secret.cache_clear()
+    assert config.keychain_secret("test-service", "test-account") == "secure-value"
+    assert "secure-value" not in seen["argv"]
+    assert seen["argv"] == [
+        "security", "find-generic-password", "-s", "test-service",
+        "-a", "test-account", "-w",
+    ]
+    assert seen["kwargs"]["capture_output"] is True
 
 
 def test_invalid_provider_fails_with_configuration_guidance(monkeypatch):

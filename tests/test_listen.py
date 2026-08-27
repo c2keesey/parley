@@ -1,6 +1,7 @@
 import pytest
 
-from parley.listen import contains_phrase, rms, strip_phrase
+from parley import listen
+from parley.listen import contains_phrase, is_stop_talking, rms, strip_phrase
 
 
 @pytest.mark.parametrize("heard", [
@@ -82,6 +83,76 @@ def test_wake_phrase_is_what_makes_overlapping_audio_safe():
         "Okay. That is done.",
     ]:
         assert not contains_phrase(reply, WAKE)
+
+
+@pytest.mark.parametrize("heard", [
+    "okay computer stop talking",
+    "Okay, computer, stop talking!",
+])
+def test_stop_talking_is_a_local_control_only_during_playback(heard):
+    assert is_stop_talking(heard, overlapped=True)
+    assert not is_stop_talking(heard, overlapped=False)
+
+
+@pytest.mark.parametrize("heard", [
+    "stop talking",
+    "okay computer stop the server",
+    "okay computer talk about stop conditions",
+])
+def test_stop_talking_near_misses_remain_normal_input(heard):
+    assert not is_stop_talking(heard, overlapped=True)
+
+
+def test_stop_talking_never_transcribes_cues_or_sends(tmp_path, monkeypatch):
+    actions = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"voice control"], True),
+    ]))
+    monkeypatch.setattr(
+        listen, "transcribe_local",
+        lambda frames: "okay computer stop talking",
+    )
+    monkeypatch.setattr(
+        listen, "transcribe_cloud",
+        lambda frames: pytest.fail("must remain local"),
+    )
+    monkeypatch.setattr(
+        listen, "inject", lambda text: pytest.fail("must not send chat"))
+    monkeypatch.setattr(
+        listen, "cue", lambda kind: pytest.fail("must not chime"))
+    monkeypatch.setattr(listen.player, "stop", lambda: actions.append("stopped"))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert actions == ["stopped"]
+
+
+def test_other_wake_input_keeps_normal_dictation_flow(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"wake"], False),
+        ([b"message"], False),
+    ]))
+    heard = iter(["okay computer run the tests", "send it"])
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+    monkeypatch.setattr(
+        listen, "transcribe_cloud",
+        lambda frames: "okay computer run the tests send it",
+    )
+    monkeypatch.setattr(listen, "inject", lambda text: sent.append(text))
+    monkeypatch.setattr(listen, "cue", lambda kind: None)
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert sent == ["run the tests"]
 
 
 def test_strip_leading_removes_anything_said_before_the_wake_phrase():

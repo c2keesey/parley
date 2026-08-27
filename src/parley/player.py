@@ -75,6 +75,13 @@ def _pending():
     return sorted(p for p in config.QUEUE.iterdir() if p.suffix == ".json")
 
 
+def _interrupt_token():
+    try:
+        return config.INTERRUPT.read_text().strip()
+    except OSError:
+        return ""
+
+
 def drain():
     """Play everything queued, in order. Returns immediately if already draining."""
     config.STATE.mkdir(parents=True, exist_ok=True)
@@ -86,6 +93,7 @@ def drain():
 
     woke = False
     spoke = False
+    interrupt = _interrupt_token()
     try:
         while True:
             items = _pending()
@@ -123,6 +131,8 @@ def drain():
                     _wake_output()
                     woke = True
                 play(audio)
+                if _interrupt_token() != interrupt:
+                    return True
                 spoke = True
             except Exception as exc:
                 config.log(f"error: {exc}")
@@ -136,6 +146,8 @@ def drain():
 
 def stop():
     """Drop everything queued and silence anything playing."""
+    config.STATE.mkdir(parents=True, exist_ok=True)
+    config.INTERRUPT.write_text(str(time.time_ns()))
     for item in _pending():
         item.unlink(missing_ok=True)
     try:

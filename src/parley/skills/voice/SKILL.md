@@ -19,7 +19,10 @@ For hands-free input, `parley listen on` from inside tmux. The user says
 "okay computer", speaks, then "send it", and the message is typed into the
 session. "scrap that" discards a message in progress.
 
-Parley automatically uses ElevenLabs speech when `ELEVENLABS_API_KEY` is in
-`~/.config/parley/env`. `parley voices` then lists available voice IDs; set
-`PARLEY_ELEVENLABS_VOICE_ID` in the environment to choose one. Never ask the
-user to paste an API key into chat.
+While speech is playing, "okay computer, stop talking" is a local interrupt:
+it stops playback and is never sent as chat. Other wake-phrase input keeps the
+normal dictate-and-send flow.
+
+Parley automatically uses ElevenLabs speech when its key is in macOS Keychain
+or `ELEVENLABS_API_KEY` is configured. `parley voices` lists available voice
+IDs; George is the default. Never ask the user to paste an API key into chat.

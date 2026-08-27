@@ -58,9 +58,11 @@ agent, in either tool, instead of running the command yourself.
 For OpenAI speech or hands-free transcription, provide `OPENAI_API_KEY` in the
 environment or in `~/.config/parley/env`.
 
-For higher-quality speech, add an ElevenLabs key to the same file. In the
-default `auto` mode, its presence switches speech output to ElevenLabs while
-OpenAI remains available for hands-free transcription:
+For higher-quality speech, store an ElevenLabs key in macOS Keychain under
+service `parley-elevenlabs-api-key` and your macOS account name. You can also
+set it in the environment or the shared env file. In the default `auto` mode,
+its presence switches speech output to ElevenLabs while OpenAI remains
+available for hands-free transcription:
 
 ```sh
 ELEVENLABS_API_KEY=...
@@ -108,9 +110,21 @@ parley listen status
 parley listen off
 ```
 
-Defaults: say **"okay computer"**, talk, then **"send it"**. A rising tone
-confirms it woke, a higher one confirms it sent, a low one means capture
-expired. Change the phrases with `PARLEY_WAKE` and `PARLEY_SEND`.
+Defaults: say **"okay computer"**, talk, then **"send it"**. A quiet low tone
+confirms it woke, a soft two-note cue confirms it sent, and a falling tone
+means capture expired. Change the phrases with `PARLEY_WAKE` and `PARLEY_SEND`.
+
+While Parley is speaking, **"okay computer, stop talking"** is a dedicated
+local voice-control command. It immediately silences playback, clears queued
+speech, makes no confirmation sound, and is never transcribed or sent as chat.
+Other wake-phrase input keeps the normal dictate-and-send flow.
+
+Wake and send cues remain tiny bundled files rather than live AI generations.
+ElevenLabs' [sound-effects API](https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert)
+is useful for design-time exploration, but its minimum generated duration is
+0.5 seconds and [each call is metered](https://elevenlabs.io/pricing/api).
+Runtime generation would make a local control cue slower, network-dependent,
+and billable without improving its reliability.
 
 ### Why it doesn't over-trigger, or cost much
 
@@ -155,6 +169,8 @@ Every knob is an environment variable.
 | `PARLEY_MODEL` | `gpt-4o-mini-tts-2025-12-15` | falls back if retired |
 | `PARLEY_ELEVENLABS_VOICE_ID` | George | ElevenLabs voice ID; `parley voices` lists yours |
 | `PARLEY_ELEVENLABS_MODEL` | `eleven_v3` | ElevenLabs text-to-speech model |
+| `PARLEY_ELEVENLABS_KEYCHAIN_SERVICE` | `parley-elevenlabs-api-key` | generic-password service used for secure key lookup |
+| `PARLEY_ELEVENLABS_KEYCHAIN_ACCOUNT` | current macOS user | generic-password account used for secure key lookup |
 | `PARLEY_SPEED` | `1.2` | OpenAI speech speed |
 | `PARLEY_INSTRUCTIONS` | conversational | delivery notes for `gpt-*` models |
 | `PARLEY_MAX_CHARS` | `3000` | caps a single utterance |
@@ -162,6 +178,7 @@ Every knob is an environment variable.
 | `PARLEY_ENV` | — | extra file to read the API key from |
 | `PARLEY_WAKE` | `okay computer` | phrase that starts capture |
 | `PARLEY_SEND` | `send it` | phrase that submits |
+| `PARLEY_STOP_TALKING` | `stop talking` | local interrupt used after the wake phrase during playback |
 | `PARLEY_MIC` | `0` | avfoundation input device index |
 | `PARLEY_MIC_THRESHOLD` | `500` | raise it in a noisy room |
 | `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | transcribes the dictated message |

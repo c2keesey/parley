@@ -3,7 +3,10 @@
 Every knob is an environment variable so a session can override the voice or
 model without editing anything.
 """
+import functools
+import getpass
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -16,6 +19,7 @@ LOCK = STATE / "player.lock"
 PIDFILE = STATE / "playing.pid"
 LOG = STATE / "speak.log"
 SILENCE = STATE / "silence.mp3"
+INTERRUPT = STATE / "interrupt"
 
 PROMPT = (
     "Spoken session: Parley announces this session's name, then reads your reply aloud. "
@@ -30,6 +34,10 @@ VOICE = os.environ.get("PARLEY_VOICE", "fable")
 ELEVENLABS_MODEL = os.environ.get("PARLEY_ELEVENLABS_MODEL", "eleven_v3")
 ELEVENLABS_VOICE = os.environ.get(
     "PARLEY_ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # George
+ELEVENLABS_KEYCHAIN_SERVICE = os.environ.get(
+    "PARLEY_ELEVENLABS_KEYCHAIN_SERVICE", "parley-elevenlabs-api-key")
+ELEVENLABS_KEYCHAIN_ACCOUNT = os.environ.get(
+    "PARLEY_ELEVENLABS_KEYCHAIN_ACCOUNT", getpass.getuser())
 SPEED = float(os.environ.get("PARLEY_SPEED", "1.2"))
 INSTRUCTIONS = os.environ.get(
     "PARLEY_INSTRUCTIONS",
@@ -82,8 +90,24 @@ def api_key():
     return secret("OPENAI_API_KEY")
 
 
+@functools.lru_cache(maxsize=4)
+def keychain_secret(service, account):
+    """Read one generic password without echoing or putting the secret in argv."""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", service,
+             "-a", account, "-w"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = result.stdout.strip()
+    return value if result.returncode == 0 and value else None
+
+
 def elevenlabs_api_key():
-    return secret("ELEVENLABS_API_KEY")
+    return secret("ELEVENLABS_API_KEY") or keychain_secret(
+        ELEVENLABS_KEYCHAIN_SERVICE, ELEVENLABS_KEYCHAIN_ACCOUNT)
 
 
 def provider():

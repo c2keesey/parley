@@ -12,6 +12,7 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LOCK", tmp_path / "player.lock")
     monkeypatch.setattr(config, "PIDFILE", tmp_path / "playing.pid")
     monkeypatch.setattr(config, "LOG", tmp_path / "speak.log")
+    monkeypatch.setattr(config, "INTERRUPT", tmp_path / "interrupt")
 
 
 @pytest.fixture
@@ -87,3 +88,31 @@ def test_stop_clears_the_queue():
         player.enqueue(word)
     player.stop()
     assert player._pending() == []
+
+
+def test_interrupting_playback_suppresses_the_done_chime(monkeypatch):
+    from parley import cues
+
+    chimed = []
+    monkeypatch.setattr(player, "synthesize", lambda text, v, m, p: b"audio")
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(player, "play", lambda audio: player.stop())
+    monkeypatch.setattr(cues, "play", lambda name: chimed.append(name))
+    player.enqueue("please stop me")
+
+    player.drain()
+
+    assert chimed == []
+    assert config.INTERRUPT.exists()
+
+
+def test_stop_terminates_the_active_audio_process(monkeypatch):
+    killed = []
+    config.PIDFILE.write_text("4242\n")
+    monkeypatch.setattr(player.os, "kill", lambda pid, signal: killed.append(
+        (pid, signal)))
+
+    player.stop()
+
+    assert killed == [(4242, 15)]
+    assert config.PIDFILE.read_text() == ""

@@ -16,6 +16,9 @@ listener can never deliver a colossal transcript.
 Speech that overlaps the agent's own voice is kept rather than discarded, but
 only the wake phrase is trusted in it. That is what allows barge-in: say the
 wake phrase over a reply and it stops talking and listens.
+
+"Okay computer, stop talking" is a stricter local-only path. When spoken over
+active playback it silences Parley immediately and is never sent to an agent.
 """
 import os
 import shutil
@@ -33,6 +36,7 @@ FRAME = 1024
 SPEECH_RMS = int(os.environ.get("PARLEY_MIC_THRESHOLD", "500"))
 MIN_SPEECH = 0.35        # seconds of sound before a burst counts as speech
 END_SILENCE = 0.7        # seconds of quiet that ends a burst
+INTERRUPT_SILENCE = 0.25 # quicker burst completion while speech is playing
 MAX_BURST = 15.0         # hard cap on a single burst
 SILENCE_TIMEOUT = float(os.environ.get("PARLEY_SILENCE_TIMEOUT", "120"))
 HARD_STOP = float(os.environ.get("PARLEY_HARD_STOP", "1200"))
@@ -42,6 +46,7 @@ SEND = os.environ.get("PARLEY_SEND", "send it")
 # Deliberately not "cancel" or "stop" — those turn up in ordinary dictation
 # about code, and a discard phrase that fires by accident is worse than none.
 CANCEL = os.environ.get("PARLEY_CANCEL", "scrap that")
+STOP_TALKING = os.environ.get("PARLEY_STOP_TALKING", "stop talking")
 
 MODEL_DIR = Path(os.environ.get(
     "PARLEY_WHISPER_MODELS", Path.home() / ".cache" / "parley"))
@@ -86,6 +91,11 @@ def contains_phrase(text, phrase):
         words[i:i + len(target)] == target
         for i in range(len(words) - len(target) + 1)
     )
+
+
+def is_stop_talking(text, overlapped):
+    """The dedicated interrupt is trusted only when playback overlapped it."""
+    return overlapped and contains_phrase(text, f"{WAKE} {STOP_TALKING}")
 
 
 def strip_phrase(text, phrase):
@@ -265,7 +275,8 @@ def bursts(device="0"):
             elif buffer:
                 buffer.append(chunk)
                 quiet += frame_seconds
-                if quiet >= END_SILENCE or voiced >= MAX_BURST:
+                end_silence = INTERRUPT_SILENCE if overlapped else END_SILENCE
+                if quiet >= end_silence or voiced >= MAX_BURST:
                     if voiced >= MIN_SPEECH:
                         yield buffer, overlapped
                     buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
@@ -331,6 +342,15 @@ def run(device="0"):
                 continue
             config.log(f"heard {heard[:80]!r} capturing={capturing} "
                        f"overlapped={overlapped}")
+
+            # This is a voice-control command, not dictation. It is handled
+            # before capture state, never reaches cloud transcription, emits
+            # no confirmation sound, and cannot become a chat message.
+            if is_stop_talking(heard, overlapped):
+                player.stop()
+                capturing, captured = False, []
+                config.log("voice-control: stopped talking")
+                continue
 
             if not capturing:
                 if not contains_phrase(heard, WAKE):
