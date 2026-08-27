@@ -117,7 +117,11 @@ parley listen off
 
 Defaults: say **"okay computer"**, talk, then **"send it"**. A quiet low tone
 confirms it woke, a soft two-note cue confirms it sent, and a falling tone
-means capture expired. Change the phrases with `PARLEY_WAKE` and `PARLEY_SEND`.
+means capture expired. Say **"scratch that"** or **"scrap that"** as a
+standalone utterance to discard the capture locally. The narrow matcher does
+not discard ordinary dictation such as "scratch that migration." Change the
+wake, send, and original cancel phrases with `PARLEY_WAKE`, `PARLEY_SEND`, and
+`PARLEY_CANCEL`.
 
 While Parley is speaking, **"okay computer, stop talking"** is a dedicated
 local voice-control command. It immediately silences playback, clears queued

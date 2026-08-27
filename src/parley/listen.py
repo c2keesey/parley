@@ -46,6 +46,7 @@ SEND = os.environ.get("PARLEY_SEND", "send it")
 # Deliberately not "cancel" or "stop" — those turn up in ordinary dictation
 # about code, and a discard phrase that fires by accident is worse than none.
 CANCEL = os.environ.get("PARLEY_CANCEL", "scrap that")
+CANCEL_ALIASES = tuple(dict.fromkeys((CANCEL, "scratch that")))
 STOP_TALKING = os.environ.get("PARLEY_STOP_TALKING", "stop talking")
 
 MODEL_DIR = Path(os.environ.get(
@@ -91,6 +92,26 @@ def contains_phrase(text, phrase):
         words[i:i + len(target)] == target
         for i in range(len(words) - len(target) + 1)
     )
+
+
+def is_cancel(text):
+    """Recognise a standalone discard command without eating dictation.
+
+    A few hesitation or politeness words may precede the command, but ordinary
+    language may not. Requiring the cancel phrase at the end also keeps phrases
+    such as "scratch that migration" in the dictated message.
+    """
+    words = normalize(text)
+    preamble_words = {"okay", "ok", "please", "um", "uh", "no", "wait"}
+    for phrase in CANCEL_ALIASES:
+        target = normalize(phrase)
+        if not target or len(words) < len(target):
+            continue
+        if words[-len(target):] != target:
+            continue
+        if all(word in preamble_words for word in words[:-len(target)]):
+            return True
+    return False
 
 
 def is_stop_talking(text, overlapped):
@@ -409,7 +430,7 @@ def run(device="0"):
                     finish(list(burst))
                 continue
 
-            if contains_phrase(heard, CANCEL):
+            if is_cancel(heard):
                 capturing, captured = False, []
                 cue("cancel")
                 config.log("discarded")

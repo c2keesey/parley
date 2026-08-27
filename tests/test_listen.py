@@ -1,7 +1,7 @@
 import pytest
 
 from parley import listen
-from parley.listen import contains_phrase, is_stop_talking, rms, strip_phrase
+from parley.listen import contains_phrase, is_cancel, is_stop_talking, rms, strip_phrase
 
 
 @pytest.mark.parametrize("heard", [
@@ -47,10 +47,17 @@ def test_short_chunk_is_not_an_error():
     assert rms(b"\x00") == 0
 
 
-@pytest.mark.parametrize("heard", ["scrap that", "Scrap that.", "okay scrap that"])
+@pytest.mark.parametrize("heard", [
+    "scrap that",
+    "Scrap that.",
+    "okay scrap that",
+    "scratch that",
+    "Scratch that.",
+    "okay, scratch that!",
+    "wait scratch that",
+])
 def test_cancel_phrase_is_recognised(heard):
-    from parley.listen import CANCEL
-    assert contains_phrase(heard, CANCEL)
+    assert is_cancel(heard)
 
 
 @pytest.mark.parametrize("heard", [
@@ -58,11 +65,42 @@ def test_cancel_phrase_is_recognised(heard):
     "stop",
     "scrap the old migration and start over",
     "that scrap heap of a function",
+    "scratch that migration and start over",
+    "Also the scratch that didn't work",
+    "say the words scratch that",
+    "we should scratch that",
+    "scratch the old migration",
 ])
 def test_ordinary_dictation_does_not_cancel(heard):
     """A discard phrase that fires by accident is worse than none."""
-    from parley.listen import CANCEL
-    assert not contains_phrase(heard, CANCEL)
+    assert not is_cancel(heard)
+
+
+def test_scratch_that_cancels_locally_without_transcribing_or_sending(
+        tmp_path, monkeypatch):
+    cues = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"wake"], False),
+        ([b"cancel"], False),
+    ]))
+    heard = iter(["okay computer start a message", "scratch that."])
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+    monkeypatch.setattr(
+        listen, "transcribe_cloud",
+        lambda frames: pytest.fail("cancel must remain local"),
+    )
+    monkeypatch.setattr(
+        listen, "inject", lambda text: pytest.fail("cancel must not send chat"))
+    monkeypatch.setattr(listen, "cue", lambda kind: cues.append(kind))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert cues == ["wake", "cancel"]
 
 
 def test_timeouts_are_ordered_sensibly():
