@@ -94,6 +94,70 @@ def contains_phrase(text, phrase):
     )
 
 
+def wake_targets():
+    """Return the configured wake phrase plus narrow local-ASR variants."""
+    configured = tuple(normalize(WAKE))
+    targets = {configured} if configured else set()
+    if configured == ("okay", "computer"):
+        targets.update({
+            ("ok", "computer"),
+            ("okay", "computers"),
+            ("ok", "computers"),
+        })
+    return tuple(sorted(targets, key=len, reverse=True))
+
+
+def contains_wake(text):
+    """Match the wake phrase and common punctuation-safe ASR renderings."""
+    words = normalize(text.replace("'", "").replace("’", ""))
+    return any(
+        words[index:index + len(target)] == list(target)
+        for target in wake_targets()
+        for index in range(len(words) - len(target) + 1)
+    )
+
+
+def strip_wake_phrases(text):
+    """Drop the initial and any repeated wake phrases from cloud text.
+
+    Everything before the first wake is also removed because a barge-in burst
+    can begin with words from Parley's own playback.
+    """
+    spoken = text.split()
+    indexed_words = []
+    for token_index, token in enumerate(spoken):
+        for word in normalize(token.replace("'", "").replace("’", "")):
+            indexed_words.append((word, token_index))
+
+    words = [word for word, _ in indexed_words]
+    matches = []
+    index = 0
+    targets = wake_targets()
+    while index < len(words):
+        target = next((
+            candidate for candidate in targets
+            if words[index:index + len(candidate)] == list(candidate)
+        ), None)
+        if target is None:
+            index += 1
+            continue
+        matches.append((index, index + len(target)))
+        index += len(target)
+
+    if not matches:
+        return text.strip()
+
+    removed = set(range(indexed_words[matches[0][1] - 1][1] + 1))
+    for start, end in matches[1:]:
+        removed.update(
+            token_index for _, token_index in indexed_words[start:end]
+        )
+    return " ".join(
+        token for token_index, token in enumerate(spoken)
+        if token_index not in removed
+    ).strip(" ,.")
+
+
 def is_cancel(text):
     """Recognise a standalone discard command without eating dictation.
 
@@ -356,7 +420,7 @@ def run(device="0"):
         except Exception as exc:
             config.log(f"transcription failed: {exc}")
             return
-        message = strip_phrase(strip_leading(spoken, WAKE), SEND)
+        message = strip_phrase(strip_wake_phrases(spoken), SEND)
         config.log(f"message {message[:80]!r}")
         if message:
             inject(message)
@@ -435,6 +499,10 @@ def run(device="0"):
                 cue("cancel")
                 config.log("discarded")
                 continue
+
+            if contains_wake(heard):
+                cue("wake")
+                config.log("wake repeated: capture still active")
 
             last_heard = now
             captured.extend(burst)

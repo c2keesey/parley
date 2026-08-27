@@ -1,7 +1,15 @@
 import pytest
 
 from parley import listen
-from parley.listen import contains_phrase, is_cancel, is_stop_talking, rms, strip_phrase
+from parley.listen import (
+    contains_phrase,
+    contains_wake,
+    is_cancel,
+    is_stop_talking,
+    rms,
+    strip_phrase,
+    strip_wake_phrases,
+)
 
 
 @pytest.mark.parametrize("heard", [
@@ -24,6 +32,46 @@ def test_wake_phrase_survives_punctuation_and_filler(heard):
 def test_near_misses_do_not_wake(heard):
     """Over-triggering is the failure mode this whole design exists to avoid."""
     assert not contains_phrase(heard, "okay computer")
+
+
+@pytest.mark.parametrize("heard", [
+    "okay computer",
+    "Okay, computer?",
+    "OK computer.",
+    "Okay, computers.",
+    "OK, computer's!",
+])
+def test_repeated_wake_tolerates_realistic_transcription_variants(heard):
+    assert contains_wake(heard)
+
+
+@pytest.mark.parametrize("heard", [
+    "okay",
+    "computer",
+    "okay supercomputer",
+    "okay computerized",
+    "computer okay",
+])
+def test_repeated_wake_rejects_near_misses(heard):
+    assert not contains_wake(heard)
+
+
+@pytest.mark.parametrize(("spoken", "expected"), [
+    (
+        "okay computer draft the note Okay, computer and keep going send it",
+        "draft the note and keep going send it",
+    ),
+    (
+        "playback words OK computer start here. Okay, computers, continue.",
+        "start here. continue",
+    ),
+    (
+        "Okay, computer's begin. OK, computer, finish.",
+        "begin. finish",
+    ),
+])
+def test_all_wake_phrases_are_removed_from_cloud_transcription(spoken, expected):
+    assert strip_wake_phrases(spoken) == expected
 
 
 def test_send_phrase_is_stripped_from_the_message():
@@ -199,6 +247,48 @@ def test_other_wake_input_keeps_normal_dictation_flow(tmp_path, monkeypatch):
     listen.run()
 
     assert sent == ["run the tests"]
+
+
+def test_repeated_wake_replays_tone_keeps_listening_and_is_not_sent(
+        tmp_path, monkeypatch):
+    cues = []
+    sent = []
+    cloud_calls = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+        ([b"wake"], False),
+        ([b"repeat"], False),
+        ([b"message"], False),
+        ([b"send"], False),
+    ]))
+    heard = iter([
+        "okay computer start a message",
+        "Okay, computers!",
+        "continue listening",
+        "send it",
+    ])
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+
+    def transcribe(frames):
+        cloud_calls.append(frames)
+        return (
+            "okay computer start a message Okay, computers! "
+            "continue listening send it"
+        )
+
+    monkeypatch.setattr(listen, "transcribe_cloud", transcribe)
+    monkeypatch.setattr(listen, "inject", lambda text: sent.append(text))
+    monkeypatch.setattr(listen, "cue", lambda kind: cues.append(kind))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert cues == ["wake", "wake", "send"]
+    assert len(cloud_calls) == 1
+    assert sent == ["start a message continue listening"]
 
 
 def test_strip_leading_removes_anything_said_before_the_wake_phrase():

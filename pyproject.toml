@@ -1,6 +1,6 @@
 [project]
 name = "parley"
-version = "0.4.1"
+version = "0.4.2"
 description = "Two-way voice for terminal coding agents — hear replies read aloud, and talk back hands-free"
 readme = "README.md"
 requires-python = ">=3.11"

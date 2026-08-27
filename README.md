@@ -123,6 +123,10 @@ not discard ordinary dictation such as "scratch that migration." Change the
 wake, send, and original cancel phrases with `PARLEY_WAKE`, `PARLEY_SEND`, and
 `PARLEY_CANCEL`.
 
+If you say **"okay computer"** again while dictating, the wake tone plays again
+as an audible confirmation that capture is still active. Parley keeps
+listening and removes the repeated wake phrase from the message it sends.
+
 While Parley is speaking, **"okay computer, stop talking"** is a dedicated
 local voice-control command. It immediately silences playback, clears queued
 speech, makes no confirmation sound, and is never transcribed or sent as chat.

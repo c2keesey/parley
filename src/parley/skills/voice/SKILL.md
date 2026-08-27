@@ -20,6 +20,8 @@ For hands-free input, `parley listen on` from inside tmux. The user says
 session. "scratch that" or "scrap that" as a standalone utterance discards a
 message in progress. A persistent tmux badge
 shows when listening is live and which session will receive the message.
+Repeating "okay computer" during capture replays the wake tone, keeps capture
+active, and removes that repeated wake phrase from the message.
 
 While speech is playing, "okay computer, stop talking" is a local interrupt:
 it stops playback and is never sent as chat. Other wake-phrase input keeps the
