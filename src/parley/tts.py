@@ -1,8 +1,11 @@
 """Speech synthesis against OpenAI or ElevenLabs."""
 import json
+import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 from parley import config
 
@@ -15,10 +18,54 @@ def synthesize(text, voice=None, model=None, provider=None):
     """MP3 bytes for text from the configured provider."""
     provider = provider or config.provider()
     if provider == "elevenlabs":
-        return _elevenlabs(text, voice, model)
+        try:
+            return _elevenlabs(text, voice, model)
+        except RuntimeError:
+            if config.PROVIDER != "auto":
+                raise
+            config.mark_tts_fallback("elevenlabs")
+            if config.api_key():
+                try:
+                    config.log("synth fallback elevenlabs -> openai")
+                    return _openai(text, config.OPENAI_FALLBACK_VOICE)
+                except RuntimeError:
+                    config.mark_tts_fallback("openai")
+            config.log("synth fallback -> macos")
+            return _macos(text)
     if provider != "openai":
+        if provider == "macos":
+            return _macos(text, voice)
         raise RuntimeError(f"unknown queued TTS provider: {provider}")
-    return _openai(text, voice, model)
+    try:
+        return _openai(text, voice, model)
+    except RuntimeError:
+        if config.PROVIDER != "auto":
+            raise
+        config.mark_tts_fallback("openai")
+        config.log("synth fallback openai -> macos")
+        return _macos(text)
+
+
+def _macos(text, voice=None, model=None):
+    """Local, zero-key speech using the built-in macOS synthesizer."""
+    voice = voice or config.MACOS_VOICE
+    with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as handle:
+        path = Path(handle.name)
+    try:
+        result = subprocess.run(
+            ["say", "-v", voice, "-r", str(config.MACOS_RATE), "-o", str(path)],
+            input=text[: config.MAX_CHARS],
+            text=True,
+            capture_output=True,
+            timeout=90,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or "local synthesis failed").strip()[:200]
+            raise RuntimeError(f"macos say -> {result.returncode}: {detail}")
+        return path.read_bytes()
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def _openai(text, voice=None, model=None):

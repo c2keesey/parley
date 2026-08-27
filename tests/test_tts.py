@@ -1,6 +1,7 @@
 import io
 import json
 import urllib.error
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,17 +18,20 @@ class Response:
 
 
 @pytest.fixture(autouse=True)
-def provider_defaults(monkeypatch):
+def provider_defaults(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "STATE", tmp_path)
     monkeypatch.setattr(config, "PROVIDER", "openai")
     monkeypatch.setattr(config, "VOICE", "fable")
     monkeypatch.setattr(config, "MODEL", "openai-model")
     monkeypatch.setattr(config, "ELEVENLABS_VOICE", "voice-123")
     monkeypatch.setattr(config, "ELEVENLABS_MODEL", "eleven-model")
+    monkeypatch.setattr(config, "MACOS_VOICE", "Eddy")
 
 
 def test_auto_selects_elevenlabs_when_its_key_is_present(monkeypatch):
     monkeypatch.setattr(config, "PROVIDER", "auto")
     monkeypatch.setattr(config, "elevenlabs_api_key", lambda: "el-key")
+    monkeypatch.setattr(config, "api_key", lambda: "openai-key")
     assert config.provider() == "elevenlabs"
     assert config.active_voice() == "voice-123"
     assert config.active_model() == "eleven-model"
@@ -36,8 +40,63 @@ def test_auto_selects_elevenlabs_when_its_key_is_present(monkeypatch):
 def test_auto_keeps_openai_without_an_elevenlabs_key(monkeypatch):
     monkeypatch.setattr(config, "PROVIDER", "auto")
     monkeypatch.setattr(config, "elevenlabs_api_key", lambda: None)
+    monkeypatch.setattr(config, "api_key", lambda: "openai-key")
     assert config.provider() == "openai"
-    assert config.active_voice() == "fable"
+    assert config.active_voice() == config.OPENAI_FALLBACK_VOICE
+
+
+def test_auto_uses_local_speech_without_any_api_key(monkeypatch):
+    monkeypatch.setattr(config, "PROVIDER", "auto")
+    monkeypatch.setattr(config, "elevenlabs_api_key", lambda: None)
+    monkeypatch.setattr(config, "api_key", lambda: None)
+    assert config.provider() == "macos"
+    assert config.active_voice() == "Eddy"
+    assert config.active_model() == "say"
+
+
+def test_auto_temporarily_uses_openai_after_elevenlabs_failure(monkeypatch):
+    monkeypatch.setattr(config, "PROVIDER", "auto")
+    monkeypatch.setattr(config, "elevenlabs_api_key", lambda: "el-key")
+    monkeypatch.setattr(config, "api_key", lambda: "openai-key")
+    monkeypatch.setattr(
+        tts,
+        "_elevenlabs",
+        lambda text, voice, model: (_ for _ in ()).throw(
+            RuntimeError("quota exceeded")
+        ),
+    )
+    fallback = []
+    monkeypatch.setattr(
+        tts,
+        "_openai",
+        lambda text, voice=None, model=None: fallback.append(
+            (text, voice, model)
+        ) or b"backup audio",
+    )
+
+    assert tts.synthesize(
+        "hello", "george-id", "eleven_v3", "elevenlabs"
+    ) == b"backup audio"
+    assert fallback == [("hello", config.OPENAI_FALLBACK_VOICE, None)]
+    assert config.tts_fallback_active()
+    assert config.provider() == "openai"
+    assert config.active_voice() == config.OPENAI_FALLBACK_VOICE
+
+
+def test_macos_synthesis_is_local_and_keeps_text_out_of_argv(monkeypatch):
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["kwargs"] = kwargs
+        Path(argv[argv.index("-o") + 1]).write_bytes(b"AIFF audio")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(tts.subprocess, "run", run)
+
+    assert tts.synthesize("private reply", "Eddy", provider="macos") == b"AIFF audio"
+    assert "private reply" not in seen["argv"]
+    assert seen["kwargs"]["input"] == "private reply"
 
 
 def test_shared_env_file_can_hold_both_provider_keys(tmp_path, monkeypatch):
@@ -95,7 +154,7 @@ def test_keychain_lookup_never_places_the_secret_in_argv(monkeypatch):
 
 def test_invalid_provider_fails_with_configuration_guidance(monkeypatch):
     monkeypatch.setattr(config, "PROVIDER", "mystery")
-    with pytest.raises(RuntimeError, match="auto, openai, or elevenlabs"):
+    with pytest.raises(RuntimeError, match="auto, openai, elevenlabs, or macos"):
         config.provider()
 
 

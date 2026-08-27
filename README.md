@@ -62,18 +62,21 @@ parley uninstall            # optionally --harness <name>
 With the skill installed you can just say "voice on" or "voice off" to the
 agent, in either tool, instead of running the command yourself.
 
-For OpenAI speech or hands-free transcription, provide `OPENAI_API_KEY` in the
-environment or in `~/.config/parley/env`.
+API keys are optional. With no keys, Parley uses macOS speech synthesis and a
+local Whisper model for full-message transcription. An OpenAI key upgrades the
+fallback voice to Onyx and enables cloud transcription.
 
 For higher-quality speech, store an ElevenLabs key in macOS Keychain under
 service `parley-elevenlabs-api-key` and your macOS account name. You can also
 set it in the environment or the shared env file. In the default `auto` mode,
 its presence switches speech output to ElevenLabs while OpenAI remains
-available for hands-free transcription:
+available for hands-free transcription. In `auto` mode the fallback chain is
+George, then OpenAI's Onyx voice, then local macOS speech. Failed paid services
+are retried periodically:
 
 ```sh
 ELEVENLABS_API_KEY=...
-OPENAI_API_KEY=sk-...        # still needed only if you use voice input
+OPENAI_API_KEY=sk-...        # optional cloud fallback and transcription
 ```
 
 Parley starts with ElevenLabs' George voice and `eleven_v3`. Run
@@ -214,8 +217,11 @@ Every knob is an environment variable.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `PARLEY_TTS_PROVIDER` | `auto` | `auto`, `openai`, or `elevenlabs`; auto prefers ElevenLabs when its key exists |
+| `PARLEY_TTS_PROVIDER` | `auto` | `auto`, `openai`, `elevenlabs`, or `macos`; auto falls through in that quality order |
 | `PARLEY_VOICE` | `fable` | one of the eleven OpenAI voices |
+| `PARLEY_OPENAI_FALLBACK_VOICE` | `onyx` | OpenAI voice used after ElevenLabs fails |
+| `PARLEY_MACOS_VOICE` | Eddy (US) | zero-key local fallback voice |
+| `PARLEY_MACOS_RATE` | `210` | local words per minute |
 | `PARLEY_MODEL` | `gpt-4o-mini-tts-2025-12-15` | falls back if retired |
 | `PARLEY_ELEVENLABS_VOICE_ID` | George | ElevenLabs voice ID; `parley voices` lists yours |
 | `PARLEY_ELEVENLABS_MODEL` | `eleven_v3` | ElevenLabs text-to-speech model |
@@ -232,7 +238,8 @@ Every knob is an environment variable.
 | `PARLEY_MIC` | `0` | avfoundation input device index |
 | `PARLEY_MIC_THRESHOLD` | `500` | raise it in a noisy room |
 | `PARLEY_MIN_SPEECH` | `0.10` | minimum voiced seconds retained for trigger detection |
-| `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | transcribes the dictated message |
+| `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | cloud model when an OpenAI key exists |
+| `PARLEY_LOCAL_STT_MODEL` | `ggml-base.en.bin` | zero-key local message model, downloaded on first use |
 | `PARLEY_STATE` | `~/.parley` | queue, logs, session flags |
 
 ## How it works

@@ -6,7 +6,8 @@ Three layers, cheapest first, so nothing expensive runs while the room is quiet:
      costs nothing, which is what makes always-on affordable.
   2. A tiny local whisper over each speech burst, looking only for the wake or
      send phrase. Runs on speech, never on wall-clock time.
-  3. The accurate cloud model, once, on the message you actually dictated.
+  3. An accurate cloud model, or a larger local Whisper model without an API
+     key, once on the message you actually dictated.
 
 Guardrails against the usual over-triggering: a wake phrase is required before
 anything is captured, an explicit send phrase is required before anything is
@@ -59,6 +60,12 @@ MODEL_DIR = Path(os.environ.get(
 TINY = MODEL_DIR / "ggml-tiny.en.bin"
 TINY_URL = ("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
             "ggml-tiny.en.bin")
+MESSAGE_MODEL = Path(os.environ.get(
+    "PARLEY_LOCAL_STT_MODEL", MODEL_DIR / "ggml-base.en.bin"))
+MESSAGE_MODEL_URL = (
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
+    "ggml-base.en.bin"
+)
 
 TARGET = config.STATE / "target"
 LISTEN_PID = config.STATE / "listener.pid"
@@ -80,6 +87,22 @@ def ensure_model():
         partial.unlink(missing_ok=True)
         return False
     partial.rename(TINY)
+    return True
+
+
+def ensure_message_model():
+    if MESSAGE_MODEL.exists():
+        return True
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    config.log(f"downloading local message model {MESSAGE_MODEL.name}")
+    partial = MESSAGE_MODEL.with_suffix(".part")
+    result = subprocess.run([
+        "curl", "-fL", "--progress-bar", "-o", str(partial), MESSAGE_MODEL_URL
+    ])
+    if result.returncode != 0:
+        partial.unlink(missing_ok=True)
+        return False
+    partial.rename(MESSAGE_MODEL)
     return True
 
 
@@ -278,13 +301,26 @@ def transcribe_local(frames):
 
 
 def transcribe_cloud(frames):
-    """The accurate model, once, on the message actually dictated."""
+    """Transcribe the final message in the cloud, or locally without a key."""
     import json
     import urllib.request
 
     key = config.api_key()
     if not key:
-        raise RuntimeError("no OPENAI_API_KEY for transcription")
+        if not ensure_message_model():
+            raise RuntimeError("could not download the local message model")
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = Path(tmp) / "message.wav"
+            write_wav(frames, wav)
+            try:
+                result = subprocess.run(
+                    [whisper_bin(), "-m", str(MESSAGE_MODEL), "-f", str(wav),
+                     "-nt", "-np", "-t", "4"],
+                    capture_output=True, text=True, timeout=120,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise RuntimeError("local message transcription failed") from exc
+        return " ".join(result.stdout.split())
 
     with tempfile.TemporaryDirectory() as tmp:
         wav = Path(tmp) / "message.wav"

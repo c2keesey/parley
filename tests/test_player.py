@@ -75,6 +75,27 @@ def test_empty_text_is_not_queued():
     assert player.enqueue("real") is True
 
 
+def test_local_aiff_audio_is_written_with_the_right_extension(monkeypatch):
+    launched = []
+
+    class Process:
+        pid = 12345
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(
+        player.subprocess,
+        "Popen",
+        lambda argv: launched.append(argv) or Process(),
+    )
+    monkeypatch.setattr(player.os, "kill", lambda pid, signal: None)
+
+    player.play(b"FORM local aiff")
+
+    assert launched[0][1].endswith(".aiff")
+
+
 def test_queue_uses_the_active_provider_voice_and_model(monkeypatch):
     monkeypatch.setattr(config, "provider", lambda: "elevenlabs")
     monkeypatch.setattr(config, "active_voice", lambda: "eleven-voice")

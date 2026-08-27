@@ -68,6 +68,21 @@ def test_repeated_wake_rejects_near_misses(heard):
     assert not contains_wake(heard)
 
 
+def test_final_message_uses_local_whisper_without_api_key(tmp_path, monkeypatch):
+    model = tmp_path / "ggml-base.en.bin"
+    model.touch()
+    monkeypatch.setattr(listen, "MESSAGE_MODEL", model)
+    monkeypatch.setattr(listen.config, "api_key", lambda: None)
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "whisper-cli")
+    monkeypatch.setattr(
+        listen.subprocess,
+        "run",
+        lambda argv, **kwargs: type("Result", (), {"stdout": "Local message.\n"})(),
+    )
+
+    assert listen.transcribe_cloud([b"\x00\x00"] * 400) == "Local message."
+
+
 @pytest.mark.parametrize(("spoken", "expected"), [
     (
         "okay computer draft the note Okay, computer and keep going send it",

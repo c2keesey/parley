@@ -58,8 +58,9 @@ def _wake_output():
 def play(audio, interrupt=None):
     config.STATE.mkdir(parents=True, exist_ok=True)
     proc = None
+    suffix = ".aiff" if audio.startswith(b"FORM") else ".mp3"
     with tempfile.NamedTemporaryFile(
-        suffix=".mp3", delete=False, dir=config.STATE
+        suffix=suffix, delete=False, dir=config.STATE
     ) as fh:
         fh.write(audio)
         path = fh.name

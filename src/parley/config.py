@@ -37,6 +37,9 @@ PROVIDER = os.environ.get("PARLEY_TTS_PROVIDER", "auto").lower()
 MODEL = os.environ.get("PARLEY_MODEL", "gpt-4o-mini-tts-2025-12-15")
 FALLBACKS = ["gpt-4o-mini-tts", "tts-1"]
 VOICE = os.environ.get("PARLEY_VOICE", "fable")
+OPENAI_FALLBACK_VOICE = os.environ.get("PARLEY_OPENAI_FALLBACK_VOICE", "onyx")
+MACOS_VOICE = os.environ.get("PARLEY_MACOS_VOICE", "Eddy (English (US))")
+MACOS_RATE = int(os.environ.get("PARLEY_MACOS_RATE", "210"))
 ELEVENLABS_MODEL = os.environ.get("PARLEY_ELEVENLABS_MODEL", "eleven_v3")
 ELEVENLABS_VOICE = os.environ.get(
     "PARLEY_ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # George
@@ -51,6 +54,7 @@ INSTRUCTIONS = os.environ.get(
     "Brisk but unhurried. Even tone, no announcer polish.",
 )
 MAX_CHARS = int(os.environ.get("PARLEY_MAX_CHARS", "3000"))
+TTS_RETRY_SECONDS = float(os.environ.get("PARLEY_TTS_RETRY_SECONDS", "300"))
 
 VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable",
           "nova", "onyx", "sage", "shimmer", "verse"]
@@ -135,18 +139,52 @@ def elevenlabs_api_key():
         ELEVENLABS_KEYCHAIN_SERVICE, ELEVENLABS_KEYCHAIN_ACCOUNT)
 
 
+def tts_fallback_active(provider="elevenlabs"):
+    """Whether auto mode is temporarily avoiding a failed speech provider."""
+    marker = STATE / f"tts-{provider}-fallback-until"
+    try:
+        active = float(marker.read_text()) > time.time()
+    except (OSError, ValueError):
+        return False
+    if not active:
+        marker.unlink(missing_ok=True)
+    return active
+
+
+def mark_tts_fallback(provider="elevenlabs"):
+    """Avoid a failed speech provider until it is worth retrying."""
+    private_write(
+        STATE / f"tts-{provider}-fallback-until",
+        str(time.time() + TTS_RETRY_SECONDS),
+    )
+
+
 def provider():
-    if PROVIDER not in ("auto", "openai", "elevenlabs"):
+    if PROVIDER not in ("auto", "openai", "elevenlabs", "macos"):
         raise RuntimeError(
-            "PARLEY_TTS_PROVIDER must be auto, openai, or elevenlabs")
+            "PARLEY_TTS_PROVIDER must be auto, openai, elevenlabs, or macos")
     if PROVIDER == "auto":
-        return "elevenlabs" if elevenlabs_api_key() else "openai"
+        if elevenlabs_api_key() and not tts_fallback_active("elevenlabs"):
+            return "elevenlabs"
+        if api_key() and not tts_fallback_active("openai"):
+            return "openai"
+        return "macos"
     return PROVIDER
 
 
 def active_voice():
-    return ELEVENLABS_VOICE if provider() == "elevenlabs" else VOICE
+    selected = provider()
+    if selected == "elevenlabs":
+        return ELEVENLABS_VOICE
+    if selected == "macos":
+        return MACOS_VOICE
+    if PROVIDER == "auto":
+        return OPENAI_FALLBACK_VOICE
+    return VOICE
 
 
 def active_model():
-    return ELEVENLABS_MODEL if provider() == "elevenlabs" else MODEL
+    selected = provider()
+    if selected == "elevenlabs":
+        return ELEVENLABS_MODEL
+    return "say" if selected == "macos" else MODEL

@@ -3,6 +3,13 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
+## 0.5.2 - 2026-08-27
+
+- Added automatic OpenAI speech fallback when ElevenLabs is temporarily
+  unavailable or out of quota, with periodic retries for the preferred voice.
+- Added zero-key macOS speech and local full-message Whisper transcription as
+  the final fallback, so Parley remains functional without API credentials.
+
 ## 0.5.1 - 2026-08-27
 
 - Fixed personalized trigger enrollment restarting hands-free input on a stale
