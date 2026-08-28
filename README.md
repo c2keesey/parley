@@ -81,8 +81,9 @@ Parley starts with ElevenLabs' George voice and `eleven_v3_conversational`. Run
 set `PARLEY_ELEVENLABS_VOICE_ID` to the one you want. Set
 `PARLEY_TTS_PROVIDER=openai` at any time to keep using OpenAI for speech.
 
-macOS only for now — playback uses `afplay`. `ffmpeg` is optional; without it
-you lose only the Bluetooth warm-up described below.
+macOS only for now — playback uses `afplay`. Basic spoken output works without
+`ffmpeg`; hands-free listening requires it for microphone capture and for
+resuming the unspoken remainder after you interrupt a reply.
 
 ## Use
 

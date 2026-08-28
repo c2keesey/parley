@@ -19,6 +19,7 @@ from parley import config
 from parley.tts import synthesize
 
 SENTENCE_BOUNDARY = re.compile(r'''[.!?]["'\u2019\u201d)\]]*(?=\s)''')
+RESUME_REWIND_SECONDS = 0.25
 
 
 def chunks(text, limit=None):
@@ -87,9 +88,39 @@ def _wake_output():
         subprocess.run(["afplay", str(config.SILENCE)], capture_output=True)
 
 
+def _pause_token():
+    try:
+        return config.PAUSE.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _remaining_audio(path, offset):
+    """Decode the unplayed tail so afplay can restart at a checkpoint."""
+    ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+    if not os.path.exists(ffmpeg):
+        raise RuntimeError("ffmpeg is required to resume interrupted speech")
+    fd, remainder = tempfile.mkstemp(suffix=".wav", dir=config.STATE)
+    os.close(fd)
+    result = subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-ss",
+         f"{offset:.3f}", "-i", path, "-c:a", "pcm_s16le", "-y", remainder],
+        capture_output=True,
+    )
+    if result.returncode:
+        os.unlink(remainder)
+        detail = result.stderr.decode(errors="replace")
+        raise RuntimeError(
+            f"could not prepare resumed speech: {detail}"
+        )
+    return remainder
+
+
 def play(audio, interrupt=None):
     config.STATE.mkdir(parents=True, exist_ok=True)
     proc = None
+    resumed_paths = []
+    offset = 0.0
     suffix = ".aiff" if audio.startswith(b"FORM") else ".mp3"
     with tempfile.NamedTemporaryFile(
         suffix=suffix, delete=False, dir=config.STATE
@@ -97,26 +128,44 @@ def play(audio, interrupt=None):
         fh.write(audio)
         path = fh.name
     try:
-        if not _wait_for_microphone(interrupt):
-            return False
-        proc = subprocess.Popen(["afplay", path])
-        with open(config.PIDFILE, "a") as fh:
-            fh.write(f"{proc.pid}\n")
-        config.SPEECH_PID.write_text(str(proc.pid))
-        # Close the race between checking the microphone turn and publishing
-        # the new audio pid. A turn that opened in that window pauses it here.
-        if microphone_active():
-            os.kill(proc.pid, signal.SIGSTOP)
-            config.log("speech paused during audio launch")
+        while True:
             if not _wait_for_microphone(interrupt):
+                return False
+            playback_path = path
+            if offset:
+                playback_path = _remaining_audio(path, offset)
+                resumed_paths.append(playback_path)
+            pause_token = _pause_token()
+            started = time.monotonic()
+            proc = subprocess.Popen(["afplay", playback_path])
+            with open(config.PIDFILE, "a") as fh:
+                fh.write(f"{proc.pid}\n")
+            config.SPEECH_PID.write_text(str(proc.pid))
+            # A turn can open between the gate check and publishing the pid.
+            # pause() changes its token before terminating playback, so the
+            # exit is distinguishable from both natural completion and stop().
+            if microphone_active() and _pause_token() == pause_token:
+                config.private_write(config.PAUSE, str(time.time_ns()))
                 proc.terminate()
-            else:
-                os.kill(proc.pid, signal.SIGCONT)
-                config.log("speech resumed after microphone turn")
-        if interrupt is not None and _interrupt_token() != interrupt:
-            proc.terminate()
-        proc.wait()
-        return interrupt is None or _interrupt_token() == interrupt
+            if interrupt is not None and _interrupt_token() != interrupt:
+                proc.terminate()
+            returncode = proc.wait()
+            elapsed = max(0.0, time.monotonic() - started)
+            try:
+                if config.SPEECH_PID.read_text().strip() == str(proc.pid):
+                    config.SPEECH_PID.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if interrupt is not None and _interrupt_token() != interrupt:
+                return False
+            if _pause_token() == pause_token or returncode == 0:
+                return True
+            offset = max(
+                0.001, offset + elapsed - RESUME_REWIND_SECONDS)
+            config.log(f"speech checkpointed at {offset:.2f}s")
+            if not _wait_for_microphone(interrupt):
+                return False
+            config.log(f"speech restarting at {offset:.2f}s after microphone turn")
     finally:
         try:
             if proc is not None and config.SPEECH_PID.read_text().strip() == str(
@@ -131,6 +180,11 @@ def play(audio, interrupt=None):
             os.unlink(path)
         except OSError:
             pass
+        for resumed_path in resumed_paths:
+            try:
+                os.unlink(resumed_path)
+            except OSError:
+                pass
 
 
 def _pending():
@@ -160,8 +214,8 @@ def microphone_active():
         return True
     was_marked = config.MIC_TURN.exists()
     config.MIC_TURN.unlink(missing_ok=True)
-    if was_marked and _signal_speech(signal.SIGCONT):
-        config.log("recovered stale microphone turn; speech resumed")
+    if was_marked:
+        config.log("recovered stale microphone turn; speech released")
     return False
 
 
@@ -193,22 +247,21 @@ def pause():
     """Give the microphone the floor while preserving current and queued speech."""
     config.STATE.mkdir(parents=True, exist_ok=True)
     config.MIC_TURN.write_text(str(os.getpid()))
-    paused = _signal_speech(signal.SIGSTOP)
+    config.private_write(config.PAUSE, str(time.time_ns()))
+    paused = _signal_speech(signal.SIGTERM)
     config.log(
-        f"microphone turn started speech={'paused' if paused else 'waiting'}")
+        f"microphone turn started speech={'checkpointing' if paused else 'waiting'}")
     return paused
 
 
 def resume():
-    """Release the microphone turn and continue the same speech process."""
+    """Release the microphone turn so checkpointed speech can restart."""
     had_turn = config.MIC_TURN.exists()
     config.MIC_TURN.unlink(missing_ok=True)
     if not had_turn:
         return False
-    resumed = _signal_speech(signal.SIGCONT)
-    config.log(
-        f"microphone turn ended speech={'resumed' if resumed else 'released'}")
-    return resumed
+    config.log("microphone turn ended speech=released")
+    return True
 
 
 def active():
@@ -307,17 +360,9 @@ def stop():
         pids = config.PIDFILE.read_text().split()
     except OSError:
         pids = []
-    try:
-        speech_pid = config.SPEECH_PID.read_text().strip()
-    except OSError:
-        speech_pid = ""
     for pid in pids:
         try:
             os.kill(int(pid), 15)
-            # A SIGTERM sent to a SIGSTOP-paused process is handled once it is
-            # continued. This guarantees explicit stop is permanent.
-            if pid == speech_pid:
-                os.kill(int(pid), signal.SIGCONT)
         except (OSError, ValueError):
             pass
     try:
