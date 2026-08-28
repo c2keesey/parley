@@ -615,11 +615,11 @@ def run(device="0"):
             # one local confirmation sound, and cannot become a chat message.
             if (is_stop_talking(heard, overlapped or speaking())
                     or (personalized == "stop" and (overlapped or speaking()))):
-                player.stop()
+                player.skip()
                 capturing, captured = False, []
                 set_listener_state("ready")
                 cue("stop")
-                config.log("voice-control: stopped talking")
+                config.log("voice-control: skipped current speech block")
                 continue
 
             if not capturing:

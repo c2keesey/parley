@@ -417,12 +417,12 @@ def test_stop_talking_stays_local_and_confirms_with_one_cue(tmp_path, monkeypatc
     monkeypatch.setattr(
         listen, "inject", lambda text: pytest.fail("must not send chat"))
     monkeypatch.setattr(listen, "cue", lambda kind: actions.append(f"cue:{kind}"))
-    monkeypatch.setattr(listen.player, "stop", lambda: actions.append("stopped"))
+    monkeypatch.setattr(listen.player, "skip", lambda: actions.append("skipped"))
     monkeypatch.setattr(listen.config, "log", lambda message: None)
 
     listen.run()
 
-    assert actions == ["stopped", "cue:stop"]
+    assert actions == ["skipped", "cue:stop"]
 
 
 def test_other_wake_input_keeps_normal_dictation_flow(tmp_path, monkeypatch):

@@ -32,8 +32,9 @@ it records guided local phrase samples, saves only private acoustic features,
 and restarts an active listener on its previous target.
 
 While speech is playing, "okay computer, stop talking" is a local interrupt:
-it permanently stops current and queued speech, plays a short two-tap
-confirmation tone, and is never sent as chat.
+it skips only the current spoken block, preserves later queued blocks and
+future messages, plays a short two-tap confirmation tone, and is never sent as
+chat.
 Ordinary "okay computer" pauses the current response for an exclusive
 dictation turn; speech resumes from that position after send or cancel, and
 newly queued speech waits until the microphone turn ends. Parley provisionally
@@ -44,4 +45,4 @@ Parley automatically uses ElevenLabs speech when its key is in macOS Keychain
 or `ELEVENLABS_API_KEY` is configured. `parley voices` lists available voice
 IDs; George is the default. Never ask the user to paste an API key into chat.
 Long replies are split at sentence boundaries into bounded TTS requests and
-played completely in order; "stop talking" discards all remaining chunks.
+played completely in order; "stop talking" skips only the active chunk.

@@ -116,7 +116,7 @@ def _remaining_audio(path, offset):
     return remainder
 
 
-def play(audio, interrupt=None):
+def play(audio, interrupt=None, skip=None):
     config.STATE.mkdir(parents=True, exist_ok=True)
     proc = None
     resumed_paths = []
@@ -129,6 +129,8 @@ def play(audio, interrupt=None):
         path = fh.name
     try:
         while True:
+            if skip is not None and _skip_token() != skip:
+                return True
             if not _wait_for_microphone(interrupt):
                 return False
             playback_path = path
@@ -149,6 +151,8 @@ def play(audio, interrupt=None):
                 proc.terminate()
             if interrupt is not None and _interrupt_token() != interrupt:
                 proc.terminate()
+            if skip is not None and _skip_token() != skip:
+                proc.terminate()
             returncode = proc.wait()
             elapsed = max(0.0, time.monotonic() - started)
             try:
@@ -158,6 +162,8 @@ def play(audio, interrupt=None):
                 pass
             if interrupt is not None and _interrupt_token() != interrupt:
                 return False
+            if skip is not None and _skip_token() != skip:
+                return True
             if _pause_token() == pause_token or returncode == 0:
                 return True
             offset = max(
@@ -195,6 +201,13 @@ def _pending():
 def _interrupt_token():
     try:
         return config.INTERRUPT.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _skip_token():
+    try:
+        return config.SKIP.read_text().strip()
     except OSError:
         return ""
 
@@ -307,6 +320,7 @@ def drain():
                 item.unlink(missing_ok=True)
                 continue
             item.unlink(missing_ok=True)
+            skip = _skip_token()
             try:
                 started = time.time()
                 audio = synthesize(
@@ -320,6 +334,10 @@ def drain():
                 if _interrupt_token() != interrupt:
                     config.log("speech interrupted before playback")
                     return True
+                if _skip_token() != skip:
+                    config.log("speech block skipped before playback")
+                    spoke = False
+                    continue
                 if not _wait_for_microphone(interrupt):
                     return True
                 if not woke:
@@ -328,11 +346,19 @@ def drain():
                 if _interrupt_token() != interrupt:
                     config.log("speech interrupted during output warm-up")
                     return True
+                if _skip_token() != skip:
+                    config.log("speech block skipped during output warm-up")
+                    spoke = False
+                    continue
                 if not _wait_for_microphone(interrupt):
                     return True
-                play(audio, interrupt)
+                play(audio, interrupt, skip)
                 if _interrupt_token() != interrupt:
                     return True
+                if _skip_token() != skip:
+                    config.log("speech block skipped during playback")
+                    spoke = False
+                    continue
                 spoke = True
             except Exception as exc:
                 config.log(f"error: {exc}")
@@ -370,6 +396,18 @@ def stop():
     except OSError:
         pass
     config.SPEECH_PID.unlink(missing_ok=True)
+
+
+def skip():
+    """End only the current speech block and leave queued speech intact."""
+    config.STATE.mkdir(parents=True, exist_ok=True)
+    config.private_write(config.SKIP, str(time.time_ns()))
+    # A stop-talking utterance ends its provisional microphone reservation too.
+    config.MIC_TURN.unlink(missing_ok=True)
+    skipped = _signal_speech(signal.SIGTERM)
+    config.log(
+        f"speech block skip requested active={'yes' if skipped else 'no'}")
+    return skipped
 
 
 def detach(fn):

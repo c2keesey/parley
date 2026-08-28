@@ -20,6 +20,7 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PAUSE", tmp_path / "pause")
     monkeypatch.setattr(config, "LOG", tmp_path / "speak.log")
     monkeypatch.setattr(config, "INTERRUPT", tmp_path / "interrupt")
+    monkeypatch.setattr(config, "SKIP", tmp_path / "skip")
     monkeypatch.setattr(indicator, "refresh", lambda: None)
 
 
@@ -28,7 +29,7 @@ def recorder(monkeypatch):
     """Capture play order and assert no two players ever run at once."""
     played, live = [], []
 
-    def fake_play(audio, interrupt=None):
+    def fake_play(audio, interrupt=None, skip=None):
         live.append(1)
         assert len(live) == 1, "two players ran at the same time"
         played.append(audio.decode())
@@ -63,7 +64,7 @@ def test_only_one_drainer_wins_the_lock(monkeypatch):
     monkeypatch.setattr(player, "_wake_output", lambda: None)
     holder_got_lock = []
 
-    def slow_play(audio, interrupt=None):
+    def slow_play(audio, interrupt=None, skip=None):
         # While this drainer is busy, a second must decline rather than queue up.
         holder_got_lock.append(player.drain())
 
@@ -163,13 +164,97 @@ def test_stop_clears_the_queue(monkeypatch):
     assert player._pending() == []
 
 
+def test_skip_current_preserves_queue_and_global_interrupt(monkeypatch):
+    killed = []
+    config.SPEECH_PID.write_text("4242")
+    monkeypatch.setattr(
+        player.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    player.enqueue("current response")
+    interrupt = player._interrupt_token()
+
+    assert player.skip()
+
+    assert killed == [(4242, player.signal.SIGTERM)]
+    assert len(player._pending()) == 1
+    assert player._interrupt_token() == interrupt
+
+
+def test_message_queued_after_skip_still_plays(recorder):
+    player.skip()
+    player.enqueue("future message")
+
+    player.drain()
+
+    assert recorder == ["future message"]
+
+
+def test_skip_during_synthesis_moves_to_next_queued_message(
+        recorder, monkeypatch):
+    synthesized = []
+
+    def synthesize(text, voice, model, provider):
+        synthesized.append(text)
+        if text == "skip this block":
+            player.skip()
+        return text.encode()
+
+    monkeypatch.setattr(player, "synthesize", synthesize)
+    player.enqueue("skip this block")
+    player.enqueue("keep this message")
+
+    player.drain()
+
+    assert synthesized == ["skip this block", "keep this message"]
+    assert recorder == ["keep this message"]
+
+
+def test_skip_during_output_warmup_moves_to_next_queued_block(
+        recorder, monkeypatch):
+    warmups = []
+
+    def warmup():
+        warmups.append(True)
+        player.skip()
+
+    monkeypatch.setattr(player, "_wake_output", warmup)
+    player.enqueue("skip during warmup")
+    player.enqueue("play after warmup")
+
+    player.drain()
+
+    assert warmups == [True]
+    assert recorder == ["play after warmup"]
+
+
+def test_skip_during_playback_moves_to_next_queued_block(
+        recorder, monkeypatch):
+    played = []
+
+    def play(audio, interrupt=None, skip=None):
+        played.append(audio.decode())
+        if len(played) == 1:
+            player.skip()
+        return True
+
+    monkeypatch.setattr(player, "play", play)
+    player.enqueue("skip while audible")
+    player.enqueue("play this next")
+
+    player.drain()
+
+    assert played == ["skip while audible", "play this next"]
+
+
 def test_interrupting_playback_suppresses_the_done_chime(monkeypatch):
     from parley import cues
 
     chimed = []
     monkeypatch.setattr(player, "synthesize", lambda text, v, m, p: b"audio")
     monkeypatch.setattr(player, "_wake_output", lambda: None)
-    monkeypatch.setattr(player, "play", lambda audio, interrupt=None: player.stop())
+    monkeypatch.setattr(
+        player, "play",
+        lambda audio, interrupt=None, skip=None: player.stop(),
+    )
     monkeypatch.setattr(cues, "play", lambda name: chimed.append(name))
     player.enqueue("please stop me")
 
@@ -201,7 +286,8 @@ def test_drainer_is_active_during_synthesis_and_clears_marker(monkeypatch):
 
     monkeypatch.setattr(player, "synthesize", synthesize)
     monkeypatch.setattr(player, "_wake_output", lambda: None)
-    monkeypatch.setattr(player, "play", lambda audio, interrupt=None: True)
+    monkeypatch.setattr(
+        player, "play", lambda audio, interrupt=None, skip=None: True)
     player.enqueue("hello")
 
     player.drain()
@@ -224,7 +310,7 @@ def test_interrupt_during_synthesis_prevents_audio_from_starting(monkeypatch):
         lambda: pytest.fail("interrupted speech must not warm output"),
     )
     monkeypatch.setattr(
-        player, "play", lambda audio, interrupt=None: pytest.fail(
+        player, "play", lambda audio, interrupt=None, skip=None: pytest.fail(
             "interrupted speech must not play"),
     )
     monkeypatch.setattr(
@@ -244,7 +330,7 @@ def test_interrupt_during_output_warmup_prevents_audio_from_starting(monkeypatch
         player, "synthesize", lambda text, voice, model, provider: b"audio")
     monkeypatch.setattr(player, "_wake_output", lambda: player.stop())
     monkeypatch.setattr(
-        player, "play", lambda audio, interrupt=None: pytest.fail(
+        player, "play", lambda audio, interrupt=None, skip=None: pytest.fail(
             "speech interrupted during warm-up must not play"),
     )
     monkeypatch.setattr(
@@ -321,7 +407,8 @@ def test_new_speech_waits_for_exclusive_microphone_turn(monkeypatch):
     monkeypatch.setattr(player, "_wake_output", lambda: None)
     monkeypatch.setattr(cues, "play", lambda name: None)
     monkeypatch.setattr(
-        player, "play", lambda audio, interrupt=None: played.set())
+        player, "play",
+        lambda audio, interrupt=None, skip=None: played.set())
     player.pause()
     player.enqueue("queued while Chris is dictating")
     thread = threading.Thread(target=player.drain)

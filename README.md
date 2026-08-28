@@ -161,9 +161,9 @@ falling pair means capture was discarded or expired. Each played cue is logged
 by name and source in `~/.parley/speak.log`.
 
 While Parley is speaking, **"okay computer, stop talking"** is a dedicated
-local voice-control command. It immediately silences playback, clears queued
-speech, plays the two-tap stop confirmation, and is never transcribed or sent
-as chat.
+local voice-control command. It immediately skips only the current spoken
+block, keeps later queued blocks and future messages, plays the two-tap stop
+confirmation, and is never transcribed or sent as chat.
 The local matcher tolerates narrow transcription variants such as
 `computer`/`computers`; other wake-phrase input keeps the normal
 dictate-and-send flow.
@@ -175,8 +175,8 @@ message is sent or cancelled. Any newly queued speech waits silently behind
 that microphone turn. A possible wake utterance reserves the microphone from
 its first voiced frame, so a reply finishing synthesis cannot begin halfway
 through the phrase before local recognition catches up. Non-wake speech
-releases that provisional reservation immediately. Only the explicit
-stop-talking command discards speech.
+releases that provisional reservation immediately. The explicit stop-talking
+command skips only the block currently being synthesized or played.
 
 Wake and send cues remain tiny bundled files rather than live AI generations.
 ElevenLabs' [sound-effects API](https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert)
