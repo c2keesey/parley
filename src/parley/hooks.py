@@ -43,6 +43,15 @@ def _clean(value):
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in str(value))
 
 
+def pane_key(pane):
+    """The marker name shared by shell commands, hooks, and the tmux badge."""
+    return "pane-" + _clean(pane)
+
+
+def pane_is_on(pane):
+    return bool(pane) and is_on([pane_key(pane)])
+
+
 def session_keys(payload=None):
     """Every identity this session might be known by, best first.
 
@@ -53,7 +62,7 @@ def session_keys(payload=None):
     keys = []
     pane = os.environ.get("TMUX_PANE")
     if pane:
-        keys.append("pane-" + _clean(pane))
+        keys.append(pane_key(pane))
     for var in SESSION_VARS:
         if os.environ.get(var):
             keys.append("id-" + _clean(os.environ[var]))

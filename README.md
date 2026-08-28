@@ -110,14 +110,15 @@ Voice output alone still leaves you typing. `parley listen` closes the
 loop: say the wake phrase, dictate, say the send phrase, and the message is
 typed into your agent's pane and submitted.
 
-While listening is active, every tmux session shows a persistent state badge:
+While listening is active, a tmux session shows the state badge only when its
+active pane has Parley turned on:
 `🎙 PARLEY READY` while the wake detector is armed, `🔴 PARLEY LISTENING` while
 capturing dictation, `⏳ PARLEY SENDING` during transcription and submission,
 and `🔊 PARLEY SPEAKING · MIC READY` during spoken output. It disappears if the
-listener stops or crashes. The receiving session says `THIS SESSION`; every
-other session shows `⚠ SENDS TO <name>` so a stale target cannot look like a
-dead microphone. `parley listen status` reports that name together with the raw
-pane id.
+listener stops or crashes. The receiving pane says `THIS PANE`; another
+Parley-enabled pane shows `⚠ SENDS TO <name>` so a stale target cannot look
+like a dead microphone. Panes where Parley is off stay uncluttered. `parley
+listen status` reports the target name together with the raw pane id.
 
 ```sh
 brew install whisper-cpp     # one-time

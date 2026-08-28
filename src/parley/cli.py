@@ -65,7 +65,7 @@ def build_parser():
 
     sub.add_parser("hook", help="hook entry point (payload on stdin)")
     indicator = sub.add_parser("indicator", help=argparse.SUPPRESS)
-    indicator.add_argument("session", nargs="?")
+    indicator.add_argument("pane", nargs="?")
     return parser
 
 
@@ -86,7 +86,7 @@ def main(argv=None):
     if command == "indicator":
         from parley.indicator import text
 
-        print(text(args.session or ""), end="")
+        print(text(args.pane or ""), end="")
         return
 
     if command == "install":
@@ -123,6 +123,9 @@ def main(argv=None):
         elif command == "off":
             hooks.turn_off(keys)
             stop()
+        from parley import indicator
+
+        indicator.refresh()
         _report(keys)
         return
 

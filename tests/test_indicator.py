@@ -3,7 +3,7 @@ import shutil
 import subprocess
 from types import SimpleNamespace
 
-from parley import indicator, listen
+from parley import hooks, indicator, listen
 
 
 def result(stdout="", returncode=0):
@@ -34,11 +34,23 @@ def test_indicator_makes_current_and_wrong_session_unmistakable(monkeypatch):
     monkeypatch.setattr(listen, "listener_state", lambda: "ready")
     monkeypatch.setattr(listen, "speaking", lambda: False)
     monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
+    monkeypatch.setattr(hooks, "pane_is_on", lambda pane: True)
 
-    assert indicator.text("$9") == " 🎙 PARLEY READY · THIS SESSION "
-    assert indicator.text("$7") == (
+    assert indicator.text("%42") == " 🎙 PARLEY READY · THIS PANE "
+    assert indicator.text("%77") == (
         " ⚠ 🎙 PARLEY READY · SENDS TO windy-falcon "
     )
+
+
+def test_indicator_is_blank_when_active_pane_has_parley_off(monkeypatch):
+    monkeypatch.setattr(listen, "is_running", lambda: 123)
+    monkeypatch.setattr(hooks, "pane_is_on", lambda pane: False)
+    monkeypatch.setattr(
+        indicator, "_session",
+        lambda pane: (_ for _ in ()).throw(AssertionError("must not resolve")),
+    )
+
+    assert indicator.text("%77") == ""
 
 
 def test_real_tmux_sessions_surface_a_stale_target(monkeypatch):
@@ -59,26 +71,34 @@ def test_real_tmux_sessions_surface_a_stale_target(monkeypatch):
         target_pane = tmux(
             "display-message", "-p", "-t", "old-target", "#{pane_id}",
         ).stdout.strip()
-        target_session = tmux(
-            "display-message", "-p", "-t", "old-target", "#{session_id}",
-        ).stdout.strip()
-        current_session = tmux(
-            "display-message", "-p", "-t", "current-work", "#{session_id}",
-        ).stdout.strip()
-
         monkeypatch.setattr(
             indicator, "_run", lambda argv, timeout=2: tmux(*argv[1:]))
         monkeypatch.setattr(listen, "is_running", lambda: 123)
         monkeypatch.setattr(listen, "get_target", lambda: target_pane)
         monkeypatch.setattr(listen, "listener_state", lambda: "ready")
         monkeypatch.setattr(listen, "speaking", lambda: False)
+        monkeypatch.setattr(hooks, "pane_is_on", lambda pane: True)
 
-        assert indicator.text(target_session) == (
-            " 🎙 PARLEY READY · THIS SESSION "
+        assert indicator.text(target_pane) == (
+            " 🎙 PARLEY READY · THIS PANE "
         )
-        assert indicator.text(current_session) == (
+        current_pane = tmux(
+            "display-message", "-p", "-t", "current-work", "#{pane_id}",
+        ).stdout.strip()
+        assert indicator.text(current_pane) == (
             " ⚠ 🎙 PARLEY READY · SENDS TO old-target "
         )
+
+        # The stored command keeps pane_id as a tmux format, so it follows the
+        # active window instead of freezing the pane that ensure() first saw.
+        assert "#{pane_id}" in indicator._badge()
+        assert tmux(
+            "new-window", "-t", "current-work", "-n", "switched",
+        ).returncode == 0
+        switched_pane = tmux(
+            "display-message", "-p", "-t", "current-work", "#{pane_id}",
+        ).stdout.strip()
+        assert switched_pane != current_pane
     finally:
         tmux("kill-server")
 
@@ -121,7 +141,7 @@ def test_ensure_appends_badge_to_every_session_and_is_idempotent(monkeypatch):
     def run(argv, timeout=2):
         calls.append(argv)
         if argv[1:3] == ["list-sessions", "-F"]:
-            return result("$1\tone\n$2\ttwo\n")
+            return result("one\ntwo\n")
         if argv[1:4] == ["show-options", "-v", "-t"]:
             session, option = argv[4], argv[5]
             return result((bars[session] if option == "status-right" else "100") + "\n")
@@ -134,8 +154,9 @@ def test_ensure_appends_badge_to_every_session_and_is_idempotent(monkeypatch):
 
     monkeypatch.setattr(indicator, "_run", run)
     assert indicator.ensure() == 2
-    assert bars["one"] == f"existing one {indicator._badge('$1')}"
-    assert bars["two"] == f"existing two {indicator._badge('$2')}"
+    assert bars["one"] == f"existing one {indicator._badge()}"
+    assert bars["two"] == f"existing two {indicator._badge()}"
+    assert "#{pane_id}" in bars["one"]
     length_updates = [
         call for call in calls
         if call[1:3] == ["set-option", "-t"]

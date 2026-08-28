@@ -28,6 +28,13 @@ def test_pane_is_the_preferred_identity(monkeypatch):
     assert hooks.session_keys()[0] == "pane-_42"
 
 
+def test_pane_badge_uses_the_same_marker_as_parley_on():
+    hooks.turn_on([hooks.pane_key("%42")])
+
+    assert hooks.pane_is_on("%42")
+    assert not hooks.pane_is_on("%43")
+
+
 def test_falls_back_to_a_harness_session_id(monkeypatch):
     monkeypatch.setenv("CODEX_THREAD_ID", "thread-9")
     assert hooks.session_keys() == ["id-thread-9"]

@@ -39,25 +39,30 @@ def session_label(pane):
     return _session(pane)[1]
 
 
-def _badge(session_id):
-    command = f"#(parley indicator '{session_id}')"
+def _badge():
+    # tmux expands pane_id in the context of each session's active window.
+    # Keeping the format expression in status-right makes the badge follow
+    # pane/window switches without rewriting the option.
+    command = "#(parley indicator '#{pane_id}')"
     return f"{BADGE_STYLE}{command}#[default]"
 
 
-def text(viewing_session=""):
+def text(viewing_pane=""):
     """Badge content, including the listener's current operational state."""
-    from parley import listen
+    from parley import hooks, listen
 
     if not listen.is_running():
         return ""
+    if viewing_pane and not hooks.pane_is_on(viewing_pane):
+        return ""
     pane = listen.get_target()
-    target_session, label = _session(pane)
-    if viewing_session and target_session == viewing_session:
-        target = " · THIS SESSION"
+    _target_session, label = _session(pane)
+    if viewing_pane and pane == viewing_pane:
+        target = " · THIS PANE"
         warning = ""
     elif label:
         target = f" · SENDS TO {label}"
-        warning = "⚠ " if viewing_session else ""
+        warning = "⚠ " if viewing_pane else ""
     else:
         target = f" · TARGET {pane or '(none)'} UNAVAILABLE"
         warning = "⚠ "
@@ -80,19 +85,17 @@ def refresh():
 
 def ensure():
     """Append the dynamic badge to every session on this tmux server."""
-    listed = _run([
-        "tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}"])
+    listed = _run(["tmux", "list-sessions", "-F", "#{session_name}"])
     if not listed or listed.returncode != 0:
         return 0
     changed = 0
-    for line in filter(None, listed.stdout.splitlines()):
-        session_id, session = line.split("\t", 1)
+    for session in filter(None, listed.stdout.splitlines()):
         shown = _run([
             "tmux", "show-options", "-v", "-t", session, "status-right"])
         if not shown or shown.returncode != 0:
             continue
         current = shown.stdout.rstrip("\n")
-        wanted = _badge(session_id)
+        wanted = _badge()
         if COMMAND in current:
             updated = BADGE_PATTERN.sub(f" {wanted}", current).lstrip()
         else:

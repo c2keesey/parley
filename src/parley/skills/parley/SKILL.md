@@ -20,8 +20,9 @@ While voice is on:
 For hands-free input, `parley listen on` from inside tmux. The user says
 "okay computer", speaks, then "send it", and the message is typed into the
 session. "scratch that" or "scrap that" as a standalone utterance discards a
-message in progress. A persistent tmux badge distinguishes READY, LISTENING,
-SENDING, and SPEAKING · MIC READY, and names the receiving session.
+message in progress. A persistent tmux badge in Parley-enabled panes
+distinguishes READY, LISTENING, SENDING, and SPEAKING · MIC READY, and names
+the receiving session. Panes with Parley turned off show no badge.
 Repeating "okay computer" during capture replays the wake tone, keeps capture
 active, and removes that repeated wake phrase from the message.
 
