@@ -236,7 +236,7 @@ Every knob is an environment variable.
 | `PARLEY_ELEVENLABS_KEYCHAIN_ACCOUNT` | current macOS user | generic-password account used for secure key lookup |
 | `PARLEY_SPEED` | `1.2` | OpenAI speech speed |
 | `PARLEY_INSTRUCTIONS` | conversational | delivery notes for `gpt-*` models |
-| `PARLEY_MAX_CHARS` | `3000` | caps a single utterance |
+| `PARLEY_MAX_CHARS` | `3000` | maximum characters per TTS request; longer replies are sentence-aware chunks |
 | `PARLEY_SESSION_NAME` | tmux session name | spoken before every automatic reply |
 | `PARLEY_ENV` | — | extra file to read the API key from |
 | `PARLEY_WAKE` | `okay computer` | phrase that starts capture |

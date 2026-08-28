@@ -8,6 +8,7 @@ holder pick up their work.
 import fcntl
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -17,23 +18,54 @@ import time
 from parley import config
 from parley.tts import synthesize
 
+SENTENCE_BOUNDARY = re.compile(r'''[.!?]["'\u2019\u201d)\]]*(?=\s)''')
+
+
+def chunks(text, limit=None):
+    """Split complete prose into bounded, speakable provider requests."""
+    remaining = (text or "").strip()
+    limit = max(1, limit or config.MAX_CHARS)
+    while len(remaining) > limit:
+        window = remaining[:limit + 1]
+        sentence_ends = [
+            match.end() for match in SENTENCE_BOUNDARY.finditer(window)
+            if match.end() <= limit
+        ]
+        if sentence_ends:
+            cut = sentence_ends[-1]
+        else:
+            whitespace = [
+                match.start() for match in re.finditer(r"\s+", window)
+                if 0 < match.start() <= limit
+            ]
+            cut = whitespace[-1] if whitespace else limit
+        yield remaining[:cut].strip()
+        remaining = remaining[cut:].lstrip()
+    if remaining:
+        yield remaining
+
 
 def enqueue(text, voice=None, model=None):
     text = (text or "").strip()
     if not text:
         return False
     config.private_directory(config.QUEUE)
-    item = {
-        "text": text[: config.MAX_CHARS],
-        "provider": config.provider(),
-        "voice": voice or config.active_voice(),
-        "model": model or config.active_model(),
-    }
-    name = f"{time.time_ns():020d}-{os.getpid()}.json"
-    # Write then rename so a drainer never sees a half-written item.
-    tmp = config.QUEUE / (name + ".tmp")
-    config.private_write(tmp, json.dumps(item))
-    tmp.rename(config.QUEUE / name)
+    provider = config.provider()
+    voice = voice or config.active_voice()
+    model = model or config.active_model()
+    timestamp = time.time_ns()
+    for index, chunk in enumerate(chunks(text)):
+        item = {
+            "text": chunk,
+            "provider": provider,
+            "voice": voice,
+            "model": model,
+        }
+        name = f"{timestamp:020d}-{os.getpid()}-{index:04d}.json"
+        # Write then rename so a drainer never sees a half-written item.
+        tmp = config.QUEUE / (name + ".tmp")
+        config.private_write(tmp, json.dumps(item))
+        tmp.rename(config.QUEUE / name)
     from parley import indicator
 
     indicator.refresh()

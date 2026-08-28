@@ -1,3 +1,4 @@
+import re
 import stat
 import threading
 
@@ -75,6 +76,41 @@ def test_empty_text_is_not_queued():
     assert player.enqueue("real") is True
 
 
+def test_long_reply_is_split_at_sentence_boundaries_without_loss(monkeypatch):
+    monkeypatch.setattr(config, "MAX_CHARS", 18)
+    text = "Alpha beta. Gamma delta. Epsilon zeta."
+
+    player.enqueue(text)
+
+    import json
+    queued = [json.loads(item.read_text())["text"] for item in player._pending()]
+    assert queued == ["Alpha beta.", "Gamma delta.", "Epsilon zeta."]
+    assert all(len(chunk) <= config.MAX_CHARS for chunk in queued)
+    assert re.sub(r"\s", "", "".join(queued)) == re.sub(r"\s", "", text)
+
+
+def test_long_sentence_falls_back_to_whitespace_then_hard_split():
+    assert list(player.chunks("alpha beta gamma delta", 10)) == [
+        "alpha beta", "gamma", "delta",
+    ]
+    assert list(player.chunks("abcdefghijk", 4)) == ["abcd", "efgh", "ijk"]
+
+
+def test_complete_multichunk_reply_plays_in_order_with_one_done_cue(
+        recorder, monkeypatch):
+    from parley import cues
+
+    monkeypatch.setattr(config, "MAX_CHARS", 12)
+    chimed = []
+    monkeypatch.setattr(cues, "play", chimed.append)
+    player.enqueue("One short. Two short. Three short.")
+
+    player.drain()
+
+    assert recorder == ["One short.", "Two short.", "Three short."]
+    assert chimed == ["done"]
+
+
 def test_local_aiff_audio_is_written_with_the_right_extension(monkeypatch):
     launched = []
 
@@ -117,9 +153,10 @@ def test_queued_reply_is_private_on_disk():
     assert stat.S_IMODE(config.QUEUE.stat().st_mode) == 0o700
 
 
-def test_stop_clears_the_queue():
-    for word in ("one", "two"):
-        player.enqueue(word)
+def test_stop_clears_the_queue(monkeypatch):
+    monkeypatch.setattr(config, "MAX_CHARS", 4)
+    player.enqueue("one two three four")
+    assert len(player._pending()) > 1
     player.stop()
     assert player._pending() == []
 

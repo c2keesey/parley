@@ -43,3 +43,5 @@ wake phrase, preventing a synthesized reply from starting mid-utterance.
 Parley automatically uses ElevenLabs speech when its key is in macOS Keychain
 or `ELEVENLABS_API_KEY` is configured. `parley voices` lists available voice
 IDs; George is the default. Never ask the user to paste an API key into chat.
+Long replies are split at sentence boundaries into bounded TTS requests and
+played completely in order; "stop talking" discards all remaining chunks.
