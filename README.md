@@ -114,7 +114,10 @@ While listening is active, every tmux session shows a persistent state badge:
 `🎙 PARLEY READY` while the wake detector is armed, `🔴 PARLEY LISTENING` while
 capturing dictation, `⏳ PARLEY SENDING` during transcription and submission,
 and `🔊 PARLEY SPEAKING · MIC READY` during spoken output. It disappears if the
-listener stops or crashes and always names the pane receiving dictated messages.
+listener stops or crashes. The receiving session says `THIS SESSION`; every
+other session shows `⚠ SENDS TO <name>` so a stale target cannot look like a
+dead microphone. `parley listen status` reports that name together with the raw
+pane id.
 
 ```sh
 brew install whisper-cpp     # one-time
@@ -150,13 +153,15 @@ as an audible confirmation that capture is still active. Parley keeps
 listening and removes the repeated wake phrase from the message it sends.
 
 The cue meanings are deliberately distinct: one warm tone means capture is
-open, a soft rising pair means the message was sent, one quiet dot means speech
-playback finished, and a darker falling pair means capture was discarded or
-expired. Each played cue is logged by name and source in `~/.parley/speak.log`.
+open, a soft rising pair means the message was sent, two low taps confirm that
+speech was stopped, one quiet dot means speech playback finished, and a darker
+falling pair means capture was discarded or expired. Each played cue is logged
+by name and source in `~/.parley/speak.log`.
 
 While Parley is speaking, **"okay computer, stop talking"** is a dedicated
 local voice-control command. It immediately silences playback, clears queued
-speech, makes no confirmation sound, and is never transcribed or sent as chat.
+speech, plays the two-tap stop confirmation, and is never transcribed or sent
+as chat.
 The local matcher tolerates narrow transcription variants such as
 `computer`/`computers`; other wake-phrase input keeps the normal
 dictate-and-send flow.

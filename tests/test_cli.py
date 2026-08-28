@@ -3,6 +3,19 @@
 from parley import cli, listen, triggers
 
 
+def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
+    monkeypatch.setattr(listen, "is_running", lambda: 123)
+    monkeypatch.setattr(listen, "get_target", lambda: "%531")
+    monkeypatch.setattr(listen, "listener_state", lambda: "ready")
+    monkeypatch.setattr(listen.triggers, "enrolled", lambda: True)
+    monkeypatch.setattr(
+        listen.indicator, "session_label", lambda pane: "ivory-lynx")
+
+    cli.main(["listen", "status"])
+
+    assert "sends to ivory-lynx (pane %531)" in capsys.readouterr().out
+
+
 def _stub_enrollment(monkeypatch):
     monkeypatch.setattr(triggers, "collect", lambda device: "samples")
     monkeypatch.setattr(

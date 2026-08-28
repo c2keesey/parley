@@ -321,7 +321,7 @@ def test_stop_talking_near_misses_remain_normal_input(heard):
     assert not is_stop_talking(heard, overlapped=True)
 
 
-def test_stop_talking_never_transcribes_cues_or_sends(tmp_path, monkeypatch):
+def test_stop_talking_stays_local_and_confirms_with_one_cue(tmp_path, monkeypatch):
     actions = []
     monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
@@ -340,14 +340,13 @@ def test_stop_talking_never_transcribes_cues_or_sends(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         listen, "inject", lambda text: pytest.fail("must not send chat"))
-    monkeypatch.setattr(
-        listen, "cue", lambda kind: pytest.fail("must not chime"))
+    monkeypatch.setattr(listen, "cue", lambda kind: actions.append(f"cue:{kind}"))
     monkeypatch.setattr(listen.player, "stop", lambda: actions.append("stopped"))
     monkeypatch.setattr(listen.config, "log", lambda message: None)
 
     listen.run()
 
-    assert actions == ["stopped"]
+    assert actions == ["stopped", "cue:stop"]
 
 
 def test_other_wake_input_keeps_normal_dictation_flow(tmp_path, monkeypatch):

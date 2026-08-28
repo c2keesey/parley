@@ -588,12 +588,13 @@ def run(device="0"):
 
             # This is a voice-control command, not dictation. It is handled
             # before capture state, never reaches cloud transcription, emits
-            # no confirmation sound, and cannot become a chat message.
+            # one local confirmation sound, and cannot become a chat message.
             if (is_stop_talking(heard, overlapped or speaking())
                     or (personalized == "stop" and (overlapped or speaking()))):
                 player.stop()
                 capturing, captured = False, []
                 set_listener_state("ready")
+                cue("stop")
                 config.log("voice-control: stopped talking")
                 continue
 

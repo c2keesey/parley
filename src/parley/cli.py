@@ -64,7 +64,8 @@ def build_parser():
         command.add_argument("--harness", choices=sorted(hooks.TARGETS))
 
     sub.add_parser("hook", help="hook entry point (payload on stdin)")
-    sub.add_parser("indicator", help=argparse.SUPPRESS)
+    indicator = sub.add_parser("indicator", help=argparse.SUPPRESS)
+    indicator.add_argument("session", nargs="?")
     return parser
 
 
@@ -85,7 +86,7 @@ def main(argv=None):
     if command == "indicator":
         from parley.indicator import text
 
-        print(text(), end="")
+        print(text(args.session or ""), end="")
         return
 
     if command == "install":
@@ -144,7 +145,12 @@ def main(argv=None):
                     f"  personalized triggers "
                     f"{'active' if listener.triggers.enrolled() else 'not enrolled'}")
                 print(f"  wake {listener.WAKE!r} -> speak -> {listener.SEND!r}")
-                print(f"  sends to pane {listener.get_target() or '(none)'}")
+                pane = listener.get_target()
+                label = listener.indicator.session_label(pane)
+                if label:
+                    print(f"  sends to {label} (pane {pane})")
+                else:
+                    print(f"  sends to unavailable pane {pane or '(none)'}")
             return
 
         pane = os.environ.get("TMUX_PANE", "")

@@ -31,7 +31,8 @@ it records guided local phrase samples, saves only private acoustic features,
 and restarts an active listener on its previous target.
 
 While speech is playing, "okay computer, stop talking" is a local interrupt:
-it permanently stops current and queued speech and is never sent as chat.
+it permanently stops current and queued speech, plays a short two-tap
+confirmation tone, and is never sent as chat.
 Ordinary "okay computer" pauses the current response for an exclusive
 dictation turn; speech resumes from that position after send or cancel, and
 newly queued speech waits until the microphone turn ends.

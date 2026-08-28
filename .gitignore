@@ -5,3 +5,9 @@ dist/
 build/
 *.egg-info/
 .pytest_cache/
+
+# Beads / Dolt local state
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/

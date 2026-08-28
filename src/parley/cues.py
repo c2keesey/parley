@@ -1,4 +1,4 @@
-"""Short tones that mark state changes: woke, sent, cancelled, finished.
+"""Short tones that mark state changes: woke, sent, stopped, cancelled, finished.
 
 Tuned to published earcon guidance rather than taste:
 
@@ -43,6 +43,7 @@ PATTERNS = {
     "send": [(392.00, 0.05), (523.25, 0.10)],    # low G4 -> C5, gently committed
     "done": [(783.99, 0.07), (523.25, 0.15)],    # G5 -> C5 falling, resolved
     "cancel": [(466.16, 0.07), (349.23, 0.15)],  # Bb4 -> F4 falling, dropped
+    "stop": [(392.00, 0.045), (392.00, 0.075)],  # two low G4 taps, speech stopped
 }
 
 

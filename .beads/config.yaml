@@ -1,0 +1,7 @@
+issue_prefix: parley
+issue-prefix: parley
+dolt.auto-start: false
+sync:
+    remote: "git+ssh://git@github.com/c2keesey/parley.git"
+validation:
+    on-create: warn

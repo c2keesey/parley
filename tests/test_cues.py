@@ -113,6 +113,13 @@ def test_cancel_uses_distinct_generated_falling_tone():
     assert cues.build("cancel") == config.STATE / "cue-cancel.wav"
 
 
+def test_stop_uses_a_distinct_generated_two_tap_tone():
+    assert cues.bundled("stop") is None
+    assert cues.PATTERNS["stop"] != cues.PATTERNS["cancel"]
+    assert cues.PATTERNS["stop"] != cues.PATTERNS["done"]
+    assert cues.build("stop") == config.STATE / "cue-stop.wav"
+
+
 def test_play_logs_semantic_cue_name_and_safe_source(monkeypatch):
     class Process:
         pid = 4242

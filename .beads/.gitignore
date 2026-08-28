@@ -1,0 +1,68 @@
+# Dolt database (managed by Dolt, not git)
+dolt/
+embeddeddolt/
+embeddeddolt
+proxieddb/
+
+# Runtime files
+bd.sock
+bd.sock.startlock
+sync-state.json
+last-touched
+.exclusive-lock
+
+# Daemon runtime (lock, log, pid)
+daemon.*
+
+# Push state (runtime, per-machine)
+push-state.json
+
+# Lock files (various runtime locks)
+*.lock
+
+# Credential key (encryption key for federation peer auth — never commit)
+.beads-credential-key
+
+# Local version tracking
+.local_version
+proxied_server_client_info.json
+
+# Worktree redirects contain machine-specific paths
+redirect
+
+# Sync state (local-only, per-machine)
+.sync.lock
+export-state/
+export-state.json
+last_pull
+
+# Ephemeral SQLite store
+ephemeral.sqlite3
+ephemeral.sqlite3-journal
+ephemeral.sqlite3-wal
+ephemeral.sqlite3-shm
+
+# Dolt server management
+dolt-server.pid
+dolt-server.log
+dolt-server.lock
+dolt-server.port
+dolt-server.activity
+
+# Debug, recovery, backup, and per-project environment artifacts
+dolt-pprof/
+*.corrupt.backup/
+backup/
+.env
+
+# Legacy database files
+*.db
+*.db?*
+*.db-journal
+*.db-wal
+*.db-shm
+db.sqlite
+bd.db
+
+# Do not add negation patterns: they override fork protection in
+# .git/info/exclude. Config files are tracked by default.

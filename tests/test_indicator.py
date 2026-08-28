@@ -1,3 +1,6 @@
+import os
+import shutil
+import subprocess
 from types import SimpleNamespace
 
 from parley import indicator, listen
@@ -10,7 +13,7 @@ def result(stdout="", returncode=0):
 def test_indicator_is_blank_when_listener_is_not_alive(monkeypatch):
     monkeypatch.setattr(listen, "is_running", lambda: 0)
     monkeypatch.setattr(
-        indicator, "_session_label",
+        indicator, "_session",
         lambda pane: (_ for _ in ()).throw(AssertionError("must not resolve")),
     )
     assert indicator.text() == ""
@@ -21,44 +24,104 @@ def test_indicator_names_the_dictation_target(monkeypatch):
     monkeypatch.setattr(listen, "get_target", lambda: "%42")
     monkeypatch.setattr(listen, "listener_state", lambda: "ready")
     monkeypatch.setattr(listen, "speaking", lambda: False)
-    monkeypatch.setattr(indicator, "_session_label", lambda pane: "windy-falcon")
-    assert indicator.text() == " 🎙 PARLEY READY → windy-falcon "
+    monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
+    assert indicator.text() == " 🎙 PARLEY READY · SENDS TO windy-falcon "
+
+
+def test_indicator_makes_current_and_wrong_session_unmistakable(monkeypatch):
+    monkeypatch.setattr(listen, "is_running", lambda: 123)
+    monkeypatch.setattr(listen, "get_target", lambda: "%42")
+    monkeypatch.setattr(listen, "listener_state", lambda: "ready")
+    monkeypatch.setattr(listen, "speaking", lambda: False)
+    monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
+
+    assert indicator.text("$9") == " 🎙 PARLEY READY · THIS SESSION "
+    assert indicator.text("$7") == (
+        " ⚠ 🎙 PARLEY READY · SENDS TO windy-falcon "
+    )
+
+
+def test_real_tmux_sessions_surface_a_stale_target(monkeypatch):
+    """Exercise the actual tmux identity boundary that made this bug silent."""
+    if not shutil.which("tmux"):
+        return
+    socket = f"parley-indicator-test-{os.getpid()}"
+
+    def tmux(*args):
+        return subprocess.run(
+            ["tmux", "-L", socket, *args], capture_output=True, text=True,
+            check=False,
+        )
+
+    assert tmux("new-session", "-d", "-s", "old-target").returncode == 0
+    try:
+        assert tmux("new-session", "-d", "-s", "current-work").returncode == 0
+        target_pane = tmux(
+            "display-message", "-p", "-t", "old-target", "#{pane_id}",
+        ).stdout.strip()
+        target_session = tmux(
+            "display-message", "-p", "-t", "old-target", "#{session_id}",
+        ).stdout.strip()
+        current_session = tmux(
+            "display-message", "-p", "-t", "current-work", "#{session_id}",
+        ).stdout.strip()
+
+        monkeypatch.setattr(
+            indicator, "_run", lambda argv, timeout=2: tmux(*argv[1:]))
+        monkeypatch.setattr(listen, "is_running", lambda: 123)
+        monkeypatch.setattr(listen, "get_target", lambda: target_pane)
+        monkeypatch.setattr(listen, "listener_state", lambda: "ready")
+        monkeypatch.setattr(listen, "speaking", lambda: False)
+
+        assert indicator.text(target_session) == (
+            " 🎙 PARLEY READY · THIS SESSION "
+        )
+        assert indicator.text(current_session) == (
+            " ⚠ 🎙 PARLEY READY · SENDS TO old-target "
+        )
+    finally:
+        tmux("kill-server")
 
 
 def test_indicator_distinguishes_capture_send_and_speech(monkeypatch):
     monkeypatch.setattr(listen, "is_running", lambda: 123)
     monkeypatch.setattr(listen, "get_target", lambda: "%42")
-    monkeypatch.setattr(indicator, "_session_label", lambda pane: "windy-falcon")
+    monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
     monkeypatch.setattr(listen, "speaking", lambda: False)
 
     monkeypatch.setattr(listen, "listener_state", lambda: "capturing")
-    assert indicator.text() == " 🔴 PARLEY LISTENING → windy-falcon "
+    assert indicator.text() == " 🔴 PARLEY LISTENING · SENDS TO windy-falcon "
     monkeypatch.setattr(listen, "listener_state", lambda: "sending")
-    assert indicator.text() == " ⏳ PARLEY SENDING → windy-falcon "
+    assert indicator.text() == " ⏳ PARLEY SENDING · SENDS TO windy-falcon "
     monkeypatch.setattr(listen, "listener_state", lambda: "ready")
     monkeypatch.setattr(listen, "speaking", lambda: True)
-    assert indicator.text() == " 🔊 PARLEY SPEAKING · MIC READY → windy-falcon "
+    assert indicator.text() == (
+        " 🔊 PARLEY SPEAKING · MIC READY · SENDS TO windy-falcon "
+    )
 
 
 def test_agent_deck_tmux_identity_becomes_a_readable_label(monkeypatch):
     monkeypatch.setattr(
         indicator, "_run",
-        lambda argv, timeout=2: result("agentdeck_c2k-8_695c9762\n"),
+        lambda argv, timeout=2: result("$9\tagentdeck_c2k-8_695c9762\n"),
     )
-    assert indicator._session_label("%42") == "c2k-8"
+    assert indicator.session_label("%42") == "c2k-8"
 
 
 def test_ensure_appends_badge_to_every_session_and_is_idempotent(monkeypatch):
     calls = []
     bars = {
         "one": "existing one",
-        "two": f"existing two {indicator.BADGE}",
+        "two": (
+            "existing two #[bg=#ff9e64,fg=#1a1b26,bold]"
+            "#(parley indicator)#[default]"
+        ),
     }
 
     def run(argv, timeout=2):
         calls.append(argv)
         if argv[1:3] == ["list-sessions", "-F"]:
-            return result("one\ntwo\n")
+            return result("$1\tone\n$2\ttwo\n")
         if argv[1:4] == ["show-options", "-v", "-t"]:
             session, option = argv[4], argv[5]
             return result((bars[session] if option == "status-right" else "100") + "\n")
@@ -70,9 +133,9 @@ def test_ensure_appends_badge_to_every_session_and_is_idempotent(monkeypatch):
         return result()
 
     monkeypatch.setattr(indicator, "_run", run)
-    assert indicator.ensure() == 1
-    assert bars["one"] == f"existing one {indicator.BADGE}"
-    assert bars["two"] == f"existing two {indicator.BADGE}"
+    assert indicator.ensure() == 2
+    assert bars["one"] == f"existing one {indicator._badge('$1')}"
+    assert bars["two"] == f"existing two {indicator._badge('$2')}"
     length_updates = [
         call for call in calls
         if call[1:3] == ["set-option", "-t"]
