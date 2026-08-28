@@ -170,7 +170,11 @@ Ordinary **"okay computer"** is a conversational pause, not a permanent stop.
 Parley pauses the current response at its present position, gives the
 microphone an exclusive turn, and resumes the same response after the dictated
 message is sent or cancelled. Any newly queued speech waits silently behind
-that microphone turn. Only the explicit stop-talking command discards speech.
+that microphone turn. A possible wake utterance reserves the microphone from
+its first voiced frame, so a reply finishing synthesis cannot begin halfway
+through the phrase before local recognition catches up. Non-wake speech
+releases that provisional reservation immediately. Only the explicit
+stop-talking command discards speech.
 
 Wake and send cues remain tiny bundled files rather than live AI generations.
 ElevenLabs' [sound-effects API](https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert)

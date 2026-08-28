@@ -431,7 +431,7 @@ def rms(chunk):
     return int((sum(s * s for s in samples) / len(samples)) ** 0.5)
 
 
-def bursts(device="0"):
+def bursts(device="0", reserve_output=True):
     """Yield (frames, was_playing) per speech burst, plus idle heartbeats.
 
     Bursts are still collected while the agent is speaking. Dropping them was
@@ -451,6 +451,7 @@ def bursts(device="0"):
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     frame_seconds = FRAME / RATE
     buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
+    provisional_turn = False
     since_beat = 0.0
     try:
         while True:
@@ -462,6 +463,17 @@ def bursts(device="0"):
                 since_beat = 0.0
                 yield None, False
             if rms(chunk) > SPEECH_RMS:
+                # A reply can finish synthesizing after the user starts the
+                # wake utterance but before tiny Whisper recognizes it. Claim
+                # the microphone on the first voiced frame so that reply stays
+                # behind the same gate as an established dictation turn. Do
+                # not pause output that was already audible: that remains the
+                # validated wake phrase's job, or Parley's own voice would
+                # repeatedly pause itself.
+                if (not buffer and reserve_output
+                        and not player.output_playing()):
+                    player.pause()
+                    provisional_turn = True
                 buffer.append(chunk)
                 voiced += frame_seconds
                 quiet = 0.0
@@ -473,12 +485,20 @@ def bursts(device="0"):
                 end_silence = INTERRUPT_SILENCE if overlapped else END_SILENCE
                 if quiet >= end_silence or voiced >= MAX_BURST:
                     if voiced >= MIN_SPEECH:
+                        # Ownership transfers to run(), which either promotes
+                        # it after a wake or promptly releases a non-command.
+                        provisional_turn = False
                         yield buffer, overlapped
                     elif voiced >= 0.05:
                         config.log(
                             f"gate ignored short audio voiced={voiced:.2f}s")
+                    if provisional_turn:
+                        player.resume()
+                        provisional_turn = False
                     buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
     finally:
+        if provisional_turn:
+            player.resume()
         process.terminate()
 
 
@@ -576,11 +596,15 @@ def run(device="0"):
                 config.log(
                     f"personalized short candidate rejected "
                     f"voiced={voiced_seconds:.2f}s")
+                if not capturing:
+                    player.resume()
                 continue
 
             heard = transcribe_local(burst)
             if not heard and not personalized:
                 config.log(f"local transcription empty frames={len(burst)}")
+                if not capturing:
+                    player.resume()
                 continue
             if heard:
                 config.log(f"heard {heard[:80]!r} capturing={capturing} "
@@ -600,6 +624,7 @@ def run(device="0"):
 
             if not capturing:
                 if personalized != "wake" and not contains_wake(heard):
+                    player.resume()
                     continue
                 # Barge-in pauses rather than discards. The microphone marker
                 # is also set when nothing is speaking yet, making dictation an
@@ -643,7 +668,9 @@ def run(device="0"):
             frames, captured = captured, []
             finish(frames)
     finally:
-        if capturing:
+        # Also releases a provisional pre-recognition turn if local
+        # classification failed or the listener exited between yield/handling.
+        if capturing or player.microphone_active():
             player.resume()
         LISTEN_PID.unlink(missing_ok=True)
         config.LISTENER_STATE.unlink(missing_ok=True)

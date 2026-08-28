@@ -35,7 +35,9 @@ it permanently stops current and queued speech, plays a short two-tap
 confirmation tone, and is never sent as chat.
 Ordinary "okay computer" pauses the current response for an exclusive
 dictation turn; speech resumes from that position after send or cancel, and
-newly queued speech waits until the microphone turn ends.
+newly queued speech waits until the microphone turn ends. Parley provisionally
+reserves the microphone from the first voiced frame while it checks for the
+wake phrase, preventing a synthesized reply from starting mid-utterance.
 
 Parley automatically uses ElevenLabs speech when its key is in macOS Keychain
 or `ELEVENLABS_API_KEY` is configured. `parley voices` lists available voice

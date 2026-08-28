@@ -223,7 +223,8 @@ def collect(device="0"):
             subprocess.run(["say", prompt], check=False)
             time.sleep(0.2)
             heartbeats = 0
-            for burst, _ in listen.bursts(device):
+            # Enrollment owns its prompts and is not a live dictation loop.
+            for burst, _ in listen.bursts(device, reserve_output=False):
                 if burst is None:
                     heartbeats += 1
                     if heartbeats >= 60:

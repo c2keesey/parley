@@ -133,6 +133,11 @@ def microphone_active():
     return False
 
 
+def output_playing():
+    """True only after an audio process has actually been launched."""
+    return _pid_alive(config.SPEECH_PID)
+
+
 def _wait_for_microphone(interrupt=None):
     """Hold spoken output behind an exclusive microphone turn."""
     while microphone_active():

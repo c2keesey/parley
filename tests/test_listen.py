@@ -18,6 +18,7 @@ def isolate_microphone_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(listen.player, "pause", lambda: False)
     monkeypatch.setattr(listen.player, "resume", lambda: False)
     monkeypatch.setattr(listen.player, "microphone_active", lambda: False)
+    monkeypatch.setattr(listen.player, "output_playing", lambda: False)
     monkeypatch.setattr(listen.config, "LISTENER_STATE", tmp_path / "listener.state")
     monkeypatch.setattr(listen.config, "TRIGGERS", tmp_path / "triggers")
     listen.triggers.load.cache_clear()
@@ -219,6 +220,81 @@ def test_click_sized_burst_remains_below_speech_gate(monkeypatch):
 
     assert actual == []
     assert logs == ["gate ignored short audio voiced=0.06s"]
+
+
+def test_possible_wake_holds_speech_before_local_recognition(monkeypatch):
+    """A reply reaching playback mid-utterance must wait for classification."""
+    import threading
+
+    first_frame_claimed = threading.Event()
+    finish_burst = threading.Event()
+    waiter_finished = threading.Event()
+    microphone_turn = threading.Event()
+
+    class RacingAudioStream:
+        def __init__(self):
+            self.chunks = iter(audio_chunks(2))
+            self.reads = 0
+
+        def read(self, size):
+            chunk = next(self.chunks, b"")
+            self.reads += 1
+            if self.reads == 2:
+                first_frame_claimed.set()
+                assert finish_burst.wait(timeout=1)
+            return chunk
+
+    process = FakeAudioProcess([])
+    process.stdout = RacingAudioStream()
+    monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(listen.player, "output_playing", lambda: False)
+    monkeypatch.setattr(listen.player, "pause", lambda: microphone_turn.set())
+    monkeypatch.setattr(listen.player, "resume", lambda: microphone_turn.clear())
+    monkeypatch.setattr(
+        listen.player, "microphone_active", lambda: microphone_turn.is_set())
+
+    classified = []
+    collector = threading.Thread(
+        target=lambda: classified.append(next(
+            burst for burst, _ in listen.bursts() if burst is not None)))
+    collector.start()
+    assert first_frame_claimed.wait(timeout=1)
+    assert microphone_turn.is_set()
+
+    waiter = threading.Thread(target=lambda: (
+        listen.player._wait_for_microphone(), waiter_finished.set()))
+    waiter.start()
+    assert not waiter_finished.wait(timeout=0.15)
+
+    finish_burst.set()
+    collector.join(timeout=1)
+    assert classified
+    assert not waiter_finished.wait(timeout=0.15)
+
+    # A non-wake classification would release here; a wake promotes the same
+    # marker until send/cancel instead.
+    listen.player.resume()
+    assert waiter_finished.wait(timeout=1)
+    waiter.join(timeout=1)
+
+
+def test_non_wake_candidate_promptly_releases_provisional_turn(
+        tmp_path, monkeypatch):
+    actions = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(
+        listen, "bursts", lambda device: iter([([b"ordinary speech"], False)]))
+    monkeypatch.setattr(
+        listen, "transcribe_local", lambda frames: "ordinary room speech")
+    monkeypatch.setattr(listen.player, "resume", lambda: actions.append("resume"))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    listen.run()
+
+    assert actions == ["resume"]
 
 
 @pytest.mark.parametrize("heard", [
