@@ -11,6 +11,12 @@ sync-state.json
 last-touched
 .exclusive-lock
 
+# Local initialization/audit artifacts. Interaction logs may contain command
+# context, so a public repository must never publish them.
+README.md
+hooks/
+interactions.jsonl
+
 # Daemon runtime (lock, log, pid)
 daemon.*
 
