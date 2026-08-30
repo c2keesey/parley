@@ -1,5 +1,6 @@
 """Command line interface."""
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -20,6 +21,36 @@ def _report(keys):
         print(config.PROMPT)
 
 
+def _status_snapshot():
+    """Credential-free process boundary for local status surfaces.
+
+    A menu-bar process normally has no tmux environment, so the listener's
+    last target is its context. A caller launched from a pane can override
+    that context naturally through TMUX_PANE. No provider discovery belongs
+    here: provider discovery can consult environment files or Keychain.
+    """
+    from parley import indicator
+    from parley import listen as listener
+
+    pane = os.environ.get("TMUX_PANE", "") or listener.get_target()
+    label = indicator.session_label(pane) if pane else ""
+    listener_running = bool(listener.is_running())
+    return {
+        "contract_version": 1,
+        "listener_running": listener_running,
+        "listener_state": (
+            listener.listener_state() if listener_running else "off"
+        ),
+        "speaking": listener.speaking(),
+        "target": {
+            "available": bool(label),
+            "label": label or None,
+            "pane": pane or None,
+        },
+        "voice_on": hooks.pane_is_on(pane),
+    }
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="parley",
@@ -30,7 +61,12 @@ def build_parser():
     sub.add_parser("on", help="speak replies in this session")
     sub.add_parser("off", help="stop speaking in this session")
     sub.add_parser("toggle", help="flip this session")
-    sub.add_parser("status", help="show this session's state")
+    status = sub.add_parser("status", help="show this session's state")
+    status.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the credential-free local status contract",
+    )
 
     default = sub.add_parser("default", help="what new sessions start as")
     default.add_argument("state", nargs="?", choices=["on", "off"])
@@ -115,6 +151,9 @@ def main(argv=None):
         return
 
     if command in ("on", "off", "toggle", "status"):
+        if command == "status" and args.json:
+            print(json.dumps(_status_snapshot(), sort_keys=True))
+            return
         keys = hooks.session_keys()
         if command == "toggle":
             command = "off" if hooks.is_on(keys) else "on"

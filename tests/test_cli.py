@@ -1,6 +1,58 @@
 """Command-line behavior tests."""
+import json
 
-from parley import cli, listen, triggers
+from parley import cli, config, hooks, indicator, listen, triggers
+
+
+def test_json_status_is_stable_and_does_not_discover_credentials(
+    monkeypatch, capsys
+):
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    monkeypatch.setattr(listen, "get_target", lambda: "%531")
+    monkeypatch.setattr(listen, "is_running", lambda: 123)
+    monkeypatch.setattr(listen, "listener_state", lambda: "capturing")
+    monkeypatch.setattr(listen, "speaking", lambda: False)
+    monkeypatch.setattr(indicator, "session_label", lambda pane: "ivory lynx")
+    monkeypatch.setattr(hooks, "pane_is_on", lambda pane: True)
+    monkeypatch.setattr(
+        config,
+        "provider",
+        lambda: (_ for _ in ()).throw(AssertionError("must not read credentials")),
+    )
+
+    cli.main(["status", "--json"])
+
+    assert json.loads(capsys.readouterr().out) == {
+        "contract_version": 1,
+        "listener_running": True,
+        "listener_state": "capturing",
+        "speaking": False,
+        "target": {
+            "available": True,
+            "label": "ivory lynx",
+            "pane": "%531",
+        },
+        "voice_on": True,
+    }
+
+
+def test_json_status_prefers_calling_pane_as_control_context(monkeypatch, capsys):
+    monkeypatch.setenv("TMUX_PANE", "%392")
+    monkeypatch.setattr(listen, "get_target", lambda: "%531")
+    monkeypatch.setattr(listen, "is_running", lambda: 0)
+    monkeypatch.setattr(listen, "speaking", lambda: False)
+    monkeypatch.setattr(indicator, "session_label", lambda pane: "current pane")
+    monkeypatch.setattr(hooks, "pane_is_on", lambda pane: False)
+
+    cli.main(["status", "--json"])
+
+    status = json.loads(capsys.readouterr().out)
+    assert status["target"] == {
+        "available": True,
+        "label": "current pane",
+        "pane": "%392",
+    }
+    assert status["listener_state"] == "off"
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
