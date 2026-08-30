@@ -33,6 +33,8 @@ you want a conversation and leave every other terminal quiet.
 
 ```sh
 uv tool install git+https://github.com/c2keesey/parley.git
+parley preflight            # read-only paths, actions, and prerequisites
+parley install --dry-run    # exact integration changes, without writing
 parley install              # wires up every agent it finds
 ```
 
@@ -48,13 +50,35 @@ present on the machine:
 | Claude Code | `~/.claude/settings.json` | `~/.claude/skills/parley/` |
 | Codex | `~/.codex/hooks.json` | `~/.codex/skills/parley/` |
 
-It is idempotent, leaves any hooks you already have alone, and backs up the
-settings file before writing. Pass `--harness claude-code` or `--harness codex`
-to target one. To undo it:
+Preflight reports Parley's installed version, the exact settings and skill
+paths, whether each is current or needs repair, and the local prerequisites for
+hands-free input. Install validates every selected harness before writing
+anything. It is idempotent, repairs a missing hook or skill from a partial
+install, leaves unrelated settings and hooks alone, preserves file modes, and
+creates a sibling `.parley-backup` before replacing an existing file. That
+backup is the stable pre-Parley recovery snapshot; update and uninstall never
+overwrite it with an intermediate installed configuration. A truncated or
+structurally invalid settings file stops the whole operation without mutation.
+
+Pass `--harness claude-code` or `--harness codex` to target one. After upgrading
+the package, inspect and apply integration changes explicitly:
 
 ```sh
+parley update --dry-run
+parley update
+```
+
+To undo the integration:
+
+```sh
+parley uninstall --dry-run  # report only
 parley uninstall            # optionally --harness <name>
 ```
+
+Uninstall removes only exact Parley hook entries and the unmodified bundled
+skill. It retains a locally modified skill, unrelated harness settings, backup
+files, `PARLEY_STATE`, and the model cache. It also does not stop or clear
+speech already in progress.
 
 With the skill installed you can just say "voice on" or "voice off" to the
 agent, in either tool, instead of running the command yourself.
