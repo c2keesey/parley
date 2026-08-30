@@ -2,7 +2,7 @@ import os
 import stat
 from contextlib import contextmanager
 
-from parley import config, hooks, listen, player
+from parley import cli, config, cues, hooks, listen, player
 
 
 @contextmanager
@@ -21,6 +21,7 @@ def configure_state(tmp_path, monkeypatch):
         "SESSIONS": state / "sessions",
         "SPOKEN": state / "spoken",
         "QUEUE": state / "queue",
+        "DEFAULT": state / "default",
         "LOCK": state / "player.lock",
         "PIDFILE": state / "playing.pid",
         "SPEECH_PID": state / "speech.pid",
@@ -128,4 +129,45 @@ def test_player_state_is_private_under_permissive_umask(tmp_path, monkeypatch):
 
     assert mode(paths["QUEUE"]) == 0o700
     assert mode(paths["INTERRUPT"]) == 0o600
+    assert mode(paths["PIDFILE"]) == 0o600
+
+
+def test_default_on_is_private_under_permissive_umask(tmp_path, monkeypatch):
+    paths = configure_state(tmp_path, monkeypatch)
+
+    with permissive_umask():
+        cli.main(["default", "on"])
+
+    assert mode(paths["STATE"]) == 0o700
+    assert mode(paths["DEFAULT"]) == 0o600
+
+
+def test_generated_cue_cache_is_private_under_permissive_umask(
+        tmp_path, monkeypatch):
+    paths = configure_state(tmp_path, monkeypatch)
+
+    with permissive_umask():
+        cue_path = cues.build("cancel")
+
+    assert mode(paths["STATE"]) == 0o700
+    assert mode(cue_path) == 0o600
+
+
+def test_listener_cue_pidfile_is_private_without_playing_audio(
+        tmp_path, monkeypatch):
+    paths = configure_state(tmp_path, monkeypatch)
+
+    class Process:
+        pid = 4242
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(cues, "bundled", lambda name: "/synthetic/bundled.wav")
+    monkeypatch.setattr(cues.subprocess, "Popen", lambda *args, **kwargs: Process())
+
+    with permissive_umask():
+        cues.play("wake")
+
+    assert mode(paths["STATE"]) == 0o700
     assert mode(paths["PIDFILE"]) == 0o600

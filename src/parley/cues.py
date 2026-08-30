@@ -90,7 +90,9 @@ def build(name):
     if not pattern:
         return None
     path = config.STATE / f"cue-{name}.wav"
+    config.private_directory(config.STATE)
     if path.exists():
+        os.chmod(path, 0o600)
         return path
     samples = []
     for frequency, seconds in pattern:
@@ -99,12 +101,12 @@ def build(name):
     # Normalise so every cue lands at the same perceived level.
     ceiling = 32767 * AMPLITUDE
     scaled = [int(max(-32767, min(32767, s / peak * ceiling))) for s in samples]
-    config.STATE.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(path), "wb") as handle:
-        handle.setnchannels(1)
-        handle.setsampwidth(2)
-        handle.setframerate(RATE)
-        handle.writeframes(struct.pack(f"{len(scaled)}h", *scaled))
+    with config.private_open(path, "wb") as output:
+        with wave.open(output, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(RATE)
+            handle.writeframes(struct.pack(f"{len(scaled)}h", *scaled))
     return path
 
 
@@ -124,7 +126,7 @@ def play(name, wait=True):
     config.log(f"cue {name} source={source} wait={str(wait).lower()}")
     # Registered so the listener knows this noise is ours and ignores it.
     try:
-        with open(config.PIDFILE, "a") as fh:
+        with config.private_open(config.PIDFILE, "a") as fh:
             fh.write(f"{proc.pid}\n")
     except OSError:
         pass
