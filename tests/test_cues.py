@@ -137,6 +137,67 @@ def test_play_logs_semantic_cue_name_and_safe_source(monkeypatch):
     assert "cue cancel source=generated wait=true" in log
 
 
+def test_finish_kills_reaps_and_cleans_marker_after_two_timeouts():
+    events = []
+
+    class StubbornProcess:
+        pid = 4242
+
+        def wait(self, timeout=None):
+            events.append(("wait", timeout))
+            assert config.PIDFILE.read_text().split() == [str(self.pid)]
+            if timeout is not None:
+                raise cues.subprocess.TimeoutExpired("afplay", timeout)
+            events.append(("reaped", None))
+            return -9
+
+        def terminate(self):
+            events.append(("terminate", None))
+
+        def kill(self):
+            events.append(("kill", None))
+
+    config.PIDFILE.write_text("4242\n")
+
+    cues._finish(StubbornProcess())
+
+    assert events == [
+        ("wait", 5),
+        ("terminate", None),
+        ("wait", 1),
+        ("kill", None),
+        ("wait", None),
+        ("reaped", None),
+    ]
+    assert not config.PIDFILE.exists()
+
+
+def test_finish_reaps_after_process_exits_during_kill_race():
+    waits = []
+
+    class ExitedProcess:
+        pid = 4242
+
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            if timeout is not None:
+                raise cues.subprocess.TimeoutExpired("afplay", timeout)
+            return 0
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            raise ProcessLookupError
+
+    config.PIDFILE.write_text("4242\n")
+
+    cues._finish(ExitedProcess())
+
+    assert waits == [5, 1, None]
+    assert not config.PIDFILE.exists()
+
+
 @pytest.mark.parametrize("name", ["wake", "send"])
 def test_custom_bundled_earcons_match_the_current_patterns(name):
     generated = cues.build(name)
