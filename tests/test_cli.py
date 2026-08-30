@@ -1,6 +1,20 @@
 """Command-line behavior tests."""
 
-from parley import cli, listen, triggers
+import json
+
+import pytest
+
+from parley import cli, config, listen, triggers
+
+
+def _write_speech_error(tmp_path, monkeypatch, stage="synthesis"):
+    monkeypatch.setattr(config, "SPEECH_ERROR", tmp_path / "speech-error.json")
+    config.private_write(config.SPEECH_ERROR, json.dumps({
+        "provider": "openai",
+        "stage": stage,
+        "policy": "drop-after-one-attempt",
+        "retry": "manual",
+    }))
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
@@ -14,6 +28,37 @@ def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
     cli.main(["listen", "status"])
 
     assert "sends to ivory-lynx (pane %531)" in capsys.readouterr().out
+
+
+def test_status_reports_sanitized_speech_failure(tmp_path, monkeypatch, capsys):
+    _write_speech_error(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli.hooks, "session_keys", lambda: ["test"])
+    monkeypatch.setattr(cli.hooks, "is_on", lambda keys: False)
+    monkeypatch.setattr(config, "provider", lambda: "openai")
+    monkeypatch.setattr(config, "active_voice", lambda: "test-voice")
+    monkeypatch.setattr(config, "active_model", lambda: "test-model")
+
+    cli.main(["status"])
+
+    error = capsys.readouterr().err
+    assert "provider=openai, stage=synthesis" in error
+    assert "dropped after one attempt" in error
+    assert "To retry" in error
+
+
+def test_say_wait_exits_nonzero_when_every_block_failed(
+        tmp_path, monkeypatch, capsys):
+    _write_speech_error(tmp_path, monkeypatch, stage="playback")
+    monkeypatch.setattr(cli, "enqueue", lambda *args, **kwargs: True)
+    monkeypatch.setattr(cli, "drain", lambda: False)
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["say", "synthetic block", "--wait"])
+
+    assert raised.value.code == 1
+    error = capsys.readouterr().err
+    assert "provider=openai, stage=playback" in error
+    assert "check afplay" in error
 
 
 def _stub_enrollment(monkeypatch):

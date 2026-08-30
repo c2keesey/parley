@@ -20,6 +20,91 @@ from parley.tts import synthesize
 
 SENTENCE_BOUNDARY = re.compile(r'''[.!?]["'\u2019\u201d)\]]*(?=\s)''')
 RESUME_REWIND_SECONDS = 0.25
+ERROR_PROVIDERS = frozenset({"openai", "elevenlabs", "macos"})
+ERROR_STAGES = frozenset({"synthesis", "playback"})
+
+
+class PlaybackError(RuntimeError):
+    """A local audio process failed without an intentional interruption."""
+
+
+def speech_error():
+    """The last sanitized operational speech failure, if it is valid."""
+    try:
+        error = json.loads(config.SPEECH_ERROR.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(error, dict):
+        return None
+    if error.get("provider") not in ERROR_PROVIDERS | {"unknown"}:
+        return None
+    if error.get("stage") not in ERROR_STAGES:
+        return None
+    if error.get("policy") != "drop-after-one-attempt":
+        return None
+    if error.get("retry") != "manual":
+        return None
+    return error
+
+
+def speech_error_message(error=None):
+    """Actionable CLI text built only from allow-listed operational fields."""
+    error = error or speech_error()
+    if not error:
+        return ""
+    provider = error["provider"]
+    stage = error["stage"]
+    if stage == "playback":
+        guidance = "check afplay and the selected audio output"
+    elif provider == "macos":
+        guidance = "check that the selected macOS voice is installed"
+    else:
+        guidance = "check provider credentials, voice/model, and network"
+    return (
+        f"parley: speech failed (provider={provider}, stage={stage}); "
+        "the failed block was dropped after one attempt. "
+        f"To retry, {guidance}, then run parley say --wait again."
+    )
+
+
+def _safe_provider(provider):
+    return provider if provider in ERROR_PROVIDERS else "unknown"
+
+
+def _record_speech_error(provider, stage, indicate):
+    """Persist and indicate a failure without retaining exception or content."""
+    error = {
+        "provider": _safe_provider(provider),
+        "stage": stage,
+        "policy": "drop-after-one-attempt",
+        "retry": "manual",
+    }
+    config.private_write(config.SPEECH_ERROR, json.dumps(error, sort_keys=True))
+    config.log(
+        f"speech failure provider={error['provider']} stage={stage} "
+        "policy=drop-after-one-attempt retry=manual"
+    )
+    from parley import indicator
+
+    indicator.refresh()
+    if indicate:
+        from parley import cues
+
+        try:
+            cues.play("error", wait=False)
+        except Exception:
+            # The persistent visual/status indication remains available when
+            # local cue playback is itself unavailable.
+            pass
+
+
+def _clear_speech_error():
+    if not config.SPEECH_ERROR.exists():
+        return
+    config.SPEECH_ERROR.unlink(missing_ok=True)
+    from parley import indicator
+
+    indicator.refresh()
 
 
 def chunks(text, limit=None):
@@ -164,8 +249,10 @@ def play(audio, interrupt=None, skip=None):
                 return False
             if skip is not None and _skip_token() != skip:
                 return True
-            if _pause_token() == pause_token or returncode == 0:
+            if returncode == 0:
                 return True
+            if _pause_token() == pause_token:
+                raise PlaybackError(f"afplay exited with status {returncode}")
             offset = max(
                 0.001, offset + elapsed - RESUME_REWIND_SECONDS)
             config.log(f"speech checkpointed at {offset:.2f}s")
@@ -295,6 +382,8 @@ def drain():
 
     woke = False
     spoke = False
+    attempted = 0
+    failures = 0
     interrupt = _interrupt_token()
     config.DRAIN_PID.write_text(str(os.getpid()))
     try:
@@ -312,7 +401,9 @@ def drain():
                         from parley import cues
 
                         cues.play("done")
-                    return True
+                    if spoke and failures == 0:
+                        _clear_speech_error()
+                    return attempted == 0 or failures < attempted
             item = items[0]
             try:
                 job = json.loads(item.read_text())
@@ -320,6 +411,7 @@ def drain():
                 item.unlink(missing_ok=True)
                 continue
             item.unlink(missing_ok=True)
+            attempted += 1
             skip = _skip_token()
             try:
                 started = time.time()
@@ -331,6 +423,12 @@ def drain():
                     f"spoke {job.get('voice')} {len(job['text'])}c "
                     f"synth={time.time() - started:.1f}s {len(audio)}b"
                 )
+            except Exception:
+                _record_speech_error(
+                    job.get("provider"), "synthesis", indicate=failures == 0)
+                failures += 1
+                continue
+            try:
                 if _interrupt_token() != interrupt:
                     config.log("speech interrupted before playback")
                     return True
@@ -360,8 +458,10 @@ def drain():
                     spoke = False
                     continue
                 spoke = True
-            except Exception as exc:
-                config.log(f"error: {exc}")
+            except Exception:
+                _record_speech_error(
+                    job.get("provider"), "playback", indicate=failures == 0)
+                failures += 1
     finally:
         try:
             if config.DRAIN_PID.read_text().strip() == str(os.getpid()):

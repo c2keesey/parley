@@ -3,7 +3,14 @@ import shutil
 import subprocess
 from types import SimpleNamespace
 
-from parley import hooks, indicator, listen
+import pytest
+
+from parley import config, hooks, indicator, listen
+
+
+@pytest.fixture(autouse=True)
+def isolated_error_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "SPEECH_ERROR", tmp_path / "speech-error.json")
 
 
 def result(stdout="", returncode=0):
@@ -17,6 +24,18 @@ def test_indicator_is_blank_when_listener_is_not_alive(monkeypatch):
         lambda pane: (_ for _ in ()).throw(AssertionError("must not resolve")),
     )
     assert indicator.text() == ""
+
+
+def test_indicator_surfaces_speech_error_without_response_content(monkeypatch):
+    config.private_write(config.SPEECH_ERROR, """{
+        "provider": "openai",
+        "stage": "synthesis",
+        "policy": "drop-after-one-attempt",
+        "retry": "manual"
+    }""")
+    monkeypatch.setattr(listen, "is_running", lambda: 0)
+
+    assert indicator.text() == " ⚠ PARLEY SPEECH ERROR · RUN PARLEY STATUS "
 
 
 def test_indicator_names_the_dictation_target(monkeypatch):

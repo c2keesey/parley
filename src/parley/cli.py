@@ -6,7 +6,14 @@ import sys
 import time
 
 from parley import __version__, config, hooks
-from parley.player import detach, drain, enqueue, stop
+from parley.player import (
+    detach,
+    drain,
+    enqueue,
+    speech_error,
+    speech_error_message,
+    stop,
+)
 
 
 def _report(keys):
@@ -18,6 +25,9 @@ def _report(keys):
         # Printed so that turning voice on mid-session lands in the agent's
         # transcript as context, without needing a session-start hook.
         print(config.PROMPT)
+    error = speech_error()
+    if error:
+        print(speech_error_message(error), file=sys.stderr)
 
 
 def build_parser():
@@ -216,7 +226,11 @@ def main(argv=None):
     if command == "say":
         enqueue(" ".join(args.text), voice=args.voice, model=args.model)
         if args.wait:
-            drain()
+            drained = drain()
+            error = speech_error()
+            if not drained and error:
+                print(speech_error_message(error), file=sys.stderr)
+                raise SystemExit(1)
         else:
             detach(drain)
         return

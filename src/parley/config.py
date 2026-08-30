@@ -25,6 +25,7 @@ LOG = STATE / "speak.log"
 SILENCE = STATE / "silence.mp3"
 INTERRUPT = STATE / "interrupt"
 SKIP = STATE / "skip"
+SPEECH_ERROR = STATE / "speech-error.json"
 LISTENER_STATE = STATE / "listener.state"
 TRIGGERS = STATE / "triggers"
 
