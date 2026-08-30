@@ -1,5 +1,6 @@
 """Command line interface."""
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -47,13 +48,34 @@ def build_parser():
 
     listen = sub.add_parser("listen", help="hands-free voice input")
     listen.add_argument("state", nargs="?", choices=["on", "off", "status", "run"])
-    listen.add_argument("--device", default=os.environ.get("PARLEY_MIC", "0"),
+    listen.add_argument("--device", default=config.MIC_DEVICE,
                         help="avfoundation audio device index")
 
     enroll = sub.add_parser(
         "enroll", help="record a local personalized trigger profile")
-    enroll.add_argument("--device", default=os.environ.get("PARLEY_MIC", "0"),
+    enroll.add_argument("--device", default=config.MIC_DEVICE,
                         help="avfoundation audio device index")
+
+    settings = sub.add_parser(
+        "config", help="inspect or change persistent non-secret settings")
+    settings_sub = settings.add_subparsers(dest="config_command")
+    settings_sub.add_parser("list", help="list effective values and sources")
+    get_setting = settings_sub.add_parser("get", help="show one effective value")
+    get_setting.add_argument("name")
+    set_setting = settings_sub.add_parser("set", help="persist one validated value")
+    set_setting.add_argument("name")
+    set_setting.add_argument("value")
+    reset_setting = settings_sub.add_parser("reset", help="remove persisted values")
+    reset_setting.add_argument("name", nargs="?")
+    reset_setting.add_argument(
+        "--all", action="store_true", dest="reset_all",
+        help="remove the settings file, including a malformed one")
+    discover = settings_sub.add_parser(
+        "discover", help="list available providers, voices, or microphones")
+    discover.add_argument("kind", choices=["providers", "voices", "devices"])
+    discover.add_argument(
+        "--provider", choices=["openai", "elevenlabs", "macos"],
+        help="provider whose voices to list")
 
     sub.add_parser("stop", help="drop the queue and stop playing")
     sub.add_parser("cues", help="regenerate the notification tones")
@@ -69,7 +91,59 @@ def build_parser():
     return parser
 
 
-def main(argv=None):
+def _show_setting(item):
+    value = json.dumps(item.value, ensure_ascii=False)
+    print(f"{item.name} = {value}  [source: {item.source}]")
+
+
+def _config_command(args):
+    action = args.config_command or "list"
+    if action == "list":
+        for item in config.all_settings():
+            _show_setting(item)
+        return
+    if action == "get":
+        _show_setting(config.resolved(args.name))
+        return
+    if action == "set":
+        name = config.set_values({args.name: args.value})[0]
+        item = config.resolved(name)
+        print(f"Saved {name} in {config.settings_path()}.")
+        _show_setting(item)
+        if item.source.startswith("environment"):
+            print(f"The session override {item.env} still takes precedence.")
+        return
+    if action == "reset":
+        if args.reset_all:
+            config.reset()
+            print(f"Removed persisted settings from {config.settings_path()}.")
+            return
+        if not args.name:
+            raise config.ConfigurationError(
+                "name is required unless --all is used")
+        config.reset(args.name)
+        print(f"Reset {args.name}; the environment or built-in default now applies.")
+        return
+    if action == "discover":
+        if args.kind == "providers":
+            result = config.discover_providers()
+            for item in result.items:
+                state = "available" if item["available"] else "unavailable"
+                print(f"{item['id']}: {state} ({item['detail']})")
+        elif args.kind == "devices":
+            result = config.discover_devices()
+            for item in result.items:
+                print(f"{item['id']}: {item['name']}")
+        else:
+            result = config.discover_voices(args.provider)
+            for item in result.items:
+                print(f"{item['name']}: {item['id']}")
+        if result.warning:
+            print(f"Discovery unavailable: {result.warning}", file=sys.stderr)
+        return
+
+
+def _main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # A harness may pass the payload as a bare JSON argument.
     if argv and argv[0].strip().startswith("{"):
@@ -78,6 +152,14 @@ def main(argv=None):
 
     args = build_parser().parse_args(argv)
     command = args.command or "hook"
+
+    if command == "config":
+        _config_command(args)
+        return
+
+    # Import is deliberately safe even with malformed numeric configuration;
+    # commands report a concise correction instead of a Python traceback.
+    config.validate()
 
     if command == "hook":
         hooks.handle(argv=argv)
@@ -214,6 +296,10 @@ def main(argv=None):
         return
 
     if command == "say":
+        if args.voice:
+            config.validate_voice(args.voice)
+        if args.model:
+            config.validate_model(args.model)
         enqueue(" ".join(args.text), voice=args.voice, model=args.model)
         if args.wait:
             drain()
@@ -222,14 +308,17 @@ def main(argv=None):
         return
 
     if command == "voices":
-        if config.provider() == "elevenlabs":
-            from parley.tts import voices
-
-            active = config.active_voice()
-            for item in voices():
-                marker = "*" if item["voice_id"] == active else " "
-                print(f"{marker} {item.get('name', 'Unnamed')}: {item['voice_id']}")
-            print("Choose one with: export PARLEY_ELEVENLABS_VOICE_ID=<id>")
+        selected = config.provider()
+        result = config.discover_voices(selected)
+        if result.warning and not result.items:
+            raise config.ConfigurationError(result.warning)
+        active = config.active_voice()
+        if selected != "openai":
+            for item in result.items:
+                marker = "*" if item["id"] == active else " "
+                print(f"{marker} {item['name']}: {item['id']}")
+            setting = "elevenlabs-voice" if selected == "elevenlabs" else "macos-voice"
+            print(f"Choose one with: parley config set {setting} VALUE")
             return
         sample = (
             " ".join(args.text)
@@ -238,6 +327,14 @@ def main(argv=None):
         for voice in config.VOICES:
             enqueue(f"{voice}. {sample}", voice=voice)
         print("Queued " + ", ".join(config.VOICES))
-        print("Choose one with: export PARLEY_VOICE=<name>")
+        print("Choose one with: parley config set voice NAME")
         detach(drain)
         return
+
+
+def main(argv=None):
+    try:
+        return _main(argv)
+    except config.ConfigurationError as exc:
+        print(f"parley: configuration error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None

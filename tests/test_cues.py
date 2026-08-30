@@ -108,6 +108,16 @@ def test_a_missing_override_falls_back_to_the_generated_cue(monkeypatch):
     assert cues.override("wake") is None
 
 
+def test_a_persisted_off_choice_silences_only_that_cue(monkeypatch):
+    config.set_values({"cue-wake": "off"})
+    monkeypatch.setattr(
+        cues.subprocess, "Popen",
+        lambda *args, **kwargs: pytest.fail("disabled cue must not play"),
+    )
+
+    cues.play("wake")
+
+
 def test_cancel_uses_distinct_generated_falling_tone():
     assert cues.bundled("cancel") is None
     assert cues.build("cancel") == config.STATE / "cue-cancel.wav"

@@ -34,7 +34,7 @@ from parley import config, cues, indicator, player, triggers
 
 RATE = 16000
 FRAME = 1024
-SPEECH_RMS = int(os.environ.get("PARLEY_MIC_THRESHOLD", "500"))
+SPEECH_RMS = config.MIC_THRESHOLD
 MIN_SPEECH = float(os.environ.get("PARLEY_MIN_SPEECH", "0.10"))
 END_SILENCE = 0.7        # seconds of quiet that ends a burst
 INTERRUPT_SILENCE = 0.25 # quicker burst completion while speech is playing
@@ -42,11 +42,11 @@ MAX_BURST = 15.0         # hard cap on a single burst
 SILENCE_TIMEOUT = float(os.environ.get("PARLEY_SILENCE_TIMEOUT", "120"))
 HARD_STOP = float(os.environ.get("PARLEY_HARD_STOP", "1200"))
 
-WAKE = os.environ.get("PARLEY_WAKE", "okay computer")
-SEND = os.environ.get("PARLEY_SEND", "send it")
+WAKE = config.WAKE
+SEND = config.SEND
 # Deliberately not "cancel" or "stop" — those turn up in ordinary dictation
 # about code, and a discard phrase that fires by accident is worse than none.
-CANCEL = os.environ.get("PARLEY_CANCEL", "scrap that")
+CANCEL = config.CANCEL
 CANCEL_ALIASES = tuple(dict.fromkeys((CANCEL, "scratch that")))
 STOP_TALKING = os.environ.get("PARLEY_STOP_TALKING", "stop talking")
 LOCAL_PROMPT = os.environ.get(

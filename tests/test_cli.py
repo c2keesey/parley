@@ -1,6 +1,8 @@
 """Command-line behavior tests."""
 
-from parley import cli, listen, triggers
+import pytest
+
+from parley import cli, config, listen, triggers
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
@@ -86,3 +88,90 @@ def test_enroll_does_not_start_listener_that_was_off(monkeypatch):
     )
 
     cli.main(["enroll"])
+
+
+def test_config_set_get_list_and_reset_show_precedence(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "STATE", tmp_path / "state")
+    monkeypatch.delenv("PARLEY_SPEED", raising=False)
+
+    cli.main(["config", "set", "speed", "1.5"])
+    assert "source: persisted" in capsys.readouterr().out
+
+    monkeypatch.setenv("PARLEY_SPEED", "1.8")
+    cli.main(["config", "get", "speed"])
+    output = capsys.readouterr().out
+    assert "1.8" in output
+    assert "environment (PARLEY_SPEED)" in output
+
+    cli.main(["config", "reset", "speed"])
+    assert not config.settings_path().exists()
+
+
+def test_config_reset_all_recovers_a_malformed_file(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "STATE", tmp_path / "state")
+    config.private_write(config.settings_path(), "not-json")
+
+    cli.main(["config", "reset", "--all"])
+
+    assert not config.settings_path().exists()
+    assert "Removed persisted settings" in capsys.readouterr().out
+
+
+def test_config_reports_malformed_environment_without_traceback(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "STATE", tmp_path / "state")
+    monkeypatch.setenv("PARLEY_SPEED", "warp-nine")
+
+    with pytest.raises(SystemExit) as error:
+        cli.main(["config", "list"])
+
+    assert error.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "configuration error" in stderr
+    assert "PARLEY_SPEED" in stderr
+
+
+def test_macos_voices_are_listed_without_queueing_openai_names(
+        monkeypatch, capsys):
+    monkeypatch.setattr(config, "validate", lambda: None)
+    monkeypatch.setattr(config, "provider", lambda: "macos")
+    monkeypatch.setattr(config, "active_voice", lambda: "Samantha")
+    monkeypatch.setattr(
+        config, "discover_voices",
+        lambda provider: config.Discovery((
+            {"id": "Samantha", "name": "Samantha"},
+            {"id": "Eddy", "name": "Eddy"},
+        )),
+    )
+    monkeypatch.setattr(
+        cli, "enqueue",
+        lambda *args, **kwargs: pytest.fail("macOS voices must not queue OpenAI names"),
+    )
+
+    cli.main(["voices"])
+
+    output = capsys.readouterr().out
+    assert "* Samantha: Samantha" in output
+    assert "macos-voice" in output
+
+
+def test_say_rejects_voice_incompatible_with_active_provider(
+        monkeypatch, capsys):
+    monkeypatch.setattr(config, "validate", lambda: None)
+    monkeypatch.setattr(
+        config, "validate_voice",
+        lambda voice: (_ for _ in ()).throw(
+            config.ConfigurationError("voice 'nova' is not available for macos")),
+    )
+    monkeypatch.setattr(
+        cli, "enqueue",
+        lambda *args, **kwargs: pytest.fail("invalid voice must not be queued"),
+    )
+
+    with pytest.raises(SystemExit) as error:
+        cli.main(["say", "--voice", "nova", "hello"])
+
+    assert error.value.code == 2
+    assert "not available for macos" in capsys.readouterr().err

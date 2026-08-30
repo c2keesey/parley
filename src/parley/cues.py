@@ -53,8 +53,10 @@ BUNDLED_NAMES = {"wake", "send", "done"}
 
 def override(name):
     """A sound file to use instead of the generated tone, if one is set."""
-    path = os.environ.get(f"PARLEY_CUE_{name.upper()}")
-    return path if path and os.path.exists(path) else None
+    choice = config.cue_choice(name)
+    if choice not in {"default", "off"} and os.path.exists(choice):
+        return choice
+    return None
 
 
 def bundled(name):
@@ -109,6 +111,8 @@ def build(name):
 
 
 def play(name, wait=True):
+    if config.cue_choice(name) == "off":
+        return
     custom = override(name)
     shipped = bundled(name)
     path = custom or shipped or build(name)
