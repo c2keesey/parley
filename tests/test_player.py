@@ -1,3 +1,4 @@
+import json
 import re
 import stat
 import threading
@@ -295,6 +296,61 @@ def test_drainer_is_active_during_synthesis_and_clears_marker(monkeypatch):
     assert active_during_synthesis == [True]
     assert not config.DRAIN_PID.exists()
     assert not player.active()
+
+
+def test_runtime_contract_tracks_queue_synthesis_and_playback(monkeypatch):
+    observed = []
+
+    def synthesize(text, voice, model, provider):
+        status = player.runtime.snapshot()
+        observed.append((
+            "synthesis",
+            status["queue"]["depth"],
+            status["speech"].copy(),
+        ))
+        return b"audio"
+
+    def play(audio, interrupt=None, skip=None):
+        status = player.runtime.snapshot()
+        observed.append((
+            "playback",
+            status["queue"]["depth"],
+            status["speech"].copy(),
+        ))
+        return True
+
+    monkeypatch.setattr(player, "synthesize", synthesize)
+    monkeypatch.setattr(player, "play", play)
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+
+    player.enqueue("private content that status must not copy")
+    queued = player.runtime.snapshot()
+    assert queued["queue"]["depth"] == 1
+    assert "private content" not in json.dumps(queued)
+
+    player.drain()
+
+    assert observed == [
+        ("synthesis", 0, {"synthesis": "active", "playback": "idle"}),
+        ("playback", 0, {"synthesis": "idle", "playback": "active"}),
+    ]
+    finished = player.runtime.snapshot()
+    assert finished["queue"]["depth"] == 0
+    assert finished["speech"] == {"synthesis": "idle", "playback": "idle"}
+
+
+def test_speech_continues_when_runtime_status_cannot_be_written(
+        recorder, monkeypatch):
+    monkeypatch.setattr(
+        player.runtime,
+        "_write_unlocked",
+        lambda _snapshot: (_ for _ in ()).throw(OSError("read-only state")),
+    )
+
+    assert player.enqueue("still speak this")
+    assert player.drain()
+
+    assert recorder == ["still speak this"]
 
 
 def test_interrupt_during_synthesis_prevents_audio_from_starting(monkeypatch):

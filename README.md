@@ -287,6 +287,37 @@ your first few words.
 long synthesis took. It records message lengths and operational events, not
 the text you dictate or the text spoken back.
 
+### Runtime status contract
+
+`parley status`, the tmux badge, and future native surfaces share one snapshot
+at `$PARLEY_STATE/runtime-status.json`. The current contract identifies itself
+as schema `parley.runtime-status`, version `1`. Every atomic replacement
+increments its global `generation`; the file and its lock are mode `0600` in a
+mode `0700` state directory.
+
+The version 1 fields are deliberately small and operational:
+
+- `listener.state`: `off`, `ready`, `capturing`, `sending`, or `degraded`.
+- `queue.depth`, plus independent `speech.synthesis` and `speech.playback`
+  states. Playback becomes `paused` in the same generation that the listener
+  takes a microphone turn.
+- A target kind, tmux pane id, and live availability bit. Session labels are
+  resolved for display and are not persisted.
+- Configured/active provider identity and a bounded provider-fallback marker.
+- Up to eight recent errors made only from allow-listed component, stage,
+  provider, and error-code values.
+- Separate listener and speech writer records containing a PID, kernel process
+  birth identity, random instance token, and heartbeat timestamp. A replacement
+  writer invalidates the previous token, and a dead or PID-reused owner is
+  recovered to `off`/`degraded` when the snapshot is read.
+
+Consumers should treat the JSON as read-only and reject unknown schemas or
+versions. The Python runtime owns all writes under a private lock and publishes
+with file and parent-directory `fsync` followed by `os.replace`, so a concurrent
+reader sees a complete old or new generation. Status persistence is
+best-effort: an unavailable state directory degrades the status view without
+stopping listening, synthesis, or playback.
+
 ## Privacy
 
 Parley has no analytics, account system, or Parley-operated server. The energy

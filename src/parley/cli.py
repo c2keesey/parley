@@ -5,15 +5,39 @@ import subprocess
 import sys
 import time
 
-from parley import __version__, config, hooks
+from parley import __version__, config, hooks, runtime
 from parley.player import detach, drain, enqueue, stop
 
 
 def _report(keys):
     on = hooks.is_on(keys)
-    print(f"parley: {'on' if on else 'off'} for this session "
-          f"(provider={config.provider()}, voice={config.active_voice()}, "
-          f"model={config.active_model()})")
+    status = runtime.snapshot()
+    provider = status["provider"]
+    active = provider["active"]
+    provider_text = provider["configured"]
+    if active != "unknown" and active != provider_text:
+        provider_text += f" -> {active}"
+    print(f"parley: {'on' if on else 'off'} for this session")
+    print(
+        f"runtime: {status['health']} generation={status['generation']} "
+        f"provider={provider_text}")
+    print(f"  listener {status['listener']['state']}")
+    print(
+        f"  speech synthesis={status['speech']['synthesis']} "
+        f"playback={status['speech']['playback']} "
+        f"queue={status['queue']['depth']}")
+    target = status["target"]
+    if target["id"]:
+        availability = "available" if target["available"] else "unavailable"
+        print(f"  target {target['id']} ({availability})")
+    else:
+        print("  target none")
+    if provider["fallback"]:
+        print(f"  fallback {provider['fallback_from']} -> {provider['active']}")
+    for error in status["errors"][-3:]:
+        print(
+            f"  recent error {error['code']} "
+            f"({error['component']}/{error['stage']})")
     if on:
         # Printed so that turning voice on mid-session lands in the agent's
         # transcript as context, without needing a session-start hook.
@@ -140,17 +164,19 @@ def main(argv=None):
             print("listening: stopped" if listener.stop() else "listening: not running")
             return
         if state == "status":
-            pid = listener.is_running()
-            print(f"listening: {'on (pid ' + str(pid) + ')' if pid else 'off'}")
-            if pid:
-                print(f"  state {listener.listener_state()}")
-                print(
-                    f"  personalized triggers "
-                    f"{'active' if listener.triggers.enrolled() else 'not enrolled'}")
-                print(f"  wake {listener.WAKE!r} -> speak -> {listener.SEND!r}")
-                pane = listener.get_target()
+            status = runtime.snapshot()
+            listener_status = status["listener"]
+            owner = status["writers"]["listener"]
+            pid = owner["pid"] if owner else 0
+            state_text = listener_status["state"]
+            running = state_text not in {"off", "degraded"}
+            print(
+                f"listening: {'on (pid ' + str(pid) + ')' if running else state_text}")
+            if running:
+                print(f"  state {state_text}")
+                pane = status["target"]["id"] or ""
                 label = listener.indicator.session_label(pane)
-                if label:
+                if status["target"]["available"] and label:
                     print(f"  sends to {label} (pane {pane})")
                 else:
                     print(f"  sends to unavailable pane {pane or '(none)'}")

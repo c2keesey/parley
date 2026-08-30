@@ -30,7 +30,7 @@ import time
 import wave
 from pathlib import Path
 
-from parley import config, cues, indicator, player, triggers
+from parley import config, cues, indicator, player, runtime, triggers
 
 RATE = 16000
 FRAME = 1024
@@ -69,6 +69,7 @@ MESSAGE_MODEL_URL = (
 
 TARGET = config.STATE / "target"
 LISTEN_PID = config.STATE / "listener.pid"
+_runtime_writer = None
 
 
 def whisper_bin():
@@ -372,8 +373,8 @@ def cue(kind):
 
 
 def set_target(pane):
-    config.STATE.mkdir(parents=True, exist_ok=True)
-    TARGET.write_text(pane or "")
+    config.private_write(TARGET, pane or "")
+    runtime.manager_set_target(pane)
 
 
 def get_target():
@@ -394,6 +395,13 @@ def inject(text):
     )
     if typed.returncode != 0:
         config.log(f"submission failed: could not type into {pane}")
+        if _runtime_writer is not None:
+            runtime.set_target(
+                _runtime_writer, pane, available=False)
+            runtime.record_error(
+                _runtime_writer,
+                "target_unavailable", "target", "submit",
+            )
         return False
     time.sleep(0.15)
     submitted = subprocess.run(
@@ -402,6 +410,13 @@ def inject(text):
     )
     if submitted.returncode != 0:
         config.log(f"submission failed: could not press Enter in {pane}")
+        if _runtime_writer is not None:
+            runtime.set_target(
+                _runtime_writer, pane, available=False)
+            runtime.record_error(
+                _runtime_writer,
+                "target_unavailable", "target", "submit",
+            )
         return False
     config.log(f"submitted to {pane} chars={len(text)}")
     return True
@@ -418,8 +433,9 @@ def listener_state():
 
 def set_listener_state(state):
     """Persist and immediately display a listener state transition."""
-    config.STATE.mkdir(parents=True, exist_ok=True)
-    config.LISTENER_STATE.write_text(state)
+    config.private_write(config.LISTENER_STATE, state)
+    if _runtime_writer is not None:
+        runtime.set_listener(_runtime_writer, state)
     indicator.refresh()
 
 
@@ -504,14 +520,16 @@ def bursts(device="0", reserve_output=True):
 
 def run(device="0"):
     """The listening loop. Runs until killed."""
+    global _runtime_writer
     if not whisper_bin():
         raise SystemExit(
             "whisper-cli not found. Install it with: brew install whisper-cpp")
     if not ensure_model():
         raise SystemExit("could not download the wake-word model")
 
-    config.STATE.mkdir(parents=True, exist_ok=True)
-    LISTEN_PID.write_text(str(os.getpid()))
+    config.private_write(LISTEN_PID, str(os.getpid()))
+    _runtime_writer = runtime.claim("listener")
+    runtime.set_target(_runtime_writer, get_target())
     set_listener_state("ready")
     config.log(f"listening wake={WAKE!r} send={SEND!r} device={device}")
     personalized_active = triggers.enrolled()
@@ -530,6 +548,10 @@ def run(device="0"):
                 spoken = transcribe_cloud(frames)
             except Exception as exc:
                 config.log(f"transcription failed: {exc}")
+                runtime.record_error(
+                    _runtime_writer,
+                    "transcription_failed", "listener", "transcribe",
+                )
                 return
             message = strip_phrase(strip_wake_phrases(spoken), SEND)
             config.log(f"message {message[:80]!r}")
@@ -548,6 +570,7 @@ def run(device="0"):
             # on every tmux status refresh, so a crash cannot leave a false ON.
             if now - last_indicator >= 5:
                 indicator.ensure()
+                runtime.heartbeat(_runtime_writer)
                 last_indicator = now
 
             if capturing:
@@ -674,6 +697,9 @@ def run(device="0"):
             player.resume()
         LISTEN_PID.unlink(missing_ok=True)
         config.LISTENER_STATE.unlink(missing_ok=True)
+        if _runtime_writer is not None:
+            runtime.release(_runtime_writer, state="off")
+            _runtime_writer = None
 
 
 def is_running():
@@ -694,6 +720,7 @@ def stop():
             pass
     LISTEN_PID.unlink(missing_ok=True)
     config.LISTENER_STATE.unlink(missing_ok=True)
+    runtime.manager_listener_off()
     indicator.refresh()
     player.resume()
     return bool(pid)

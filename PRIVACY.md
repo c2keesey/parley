@@ -11,6 +11,11 @@ Parley-operated backend.
 - Session routing, notification cues, and playback coordination.
 - Operational logs. Logs contain timestamps, cue names, provider errors,
   timing, byte counts, and message lengths—not dictated or spoken message text.
+- The versioned runtime status snapshot. It contains bounded operational states,
+  queue depth, tmux pane id/availability, provider/fallback identity, process
+  ownership, and sanitized error codes. It never contains dictated or spoken
+  text, exception details, session labels, voice/model names, trigger features,
+  credentials, or filesystem paths.
 
 Before a wake phrase is accepted, short speech bursts may be processed by the
 local recognizer and are then discarded. Once capture begins, audio is held in
@@ -35,6 +40,11 @@ terms and data policy govern the data sent directly to that provider.
 Runtime state is stored under `~/.parley` by default and sensitive files are
 created with user-only permissions. The local whisper model is cached under
 `~/.cache/parley`.
+
+`runtime-status.json` is atomically replaced at mode `0600`; its lock is also
+`0600`, and the containing state directory is `0700`. Corrupt or unknown
+snapshot structures are replaced with a generic degraded status rather than
+displayed, so the file cannot become a channel for arbitrary private text.
 
 Run `parley listen off`, then delete those two directories to remove local
 runtime state, logs, personalized trigger features, and the downloaded model.

@@ -9,6 +9,22 @@ from pathlib import Path
 
 from parley import config
 
+
+def _provider_status(active, fallback_from=None):
+    """Publish only provider identities, never provider error details."""
+    from parley import runtime
+
+    writer = runtime.current_writer("speech")
+    if writer is None:
+        return
+    runtime.set_provider(writer, active, fallback_from)
+    if fallback_from and fallback_from != active:
+        runtime.record_error(
+            writer,
+            "provider_fallback", "provider", "synthesize", fallback_from,
+        )
+
+
 OPENAI_ENDPOINT = "https://api.openai.com/v1/audio/speech"
 ELEVENLABS_ENDPOINT = "https://api.elevenlabs.io/v1/text-to-speech"
 ELEVENLABS_VOICES_ENDPOINT = "https://api.elevenlabs.io/v2/voices"
@@ -17,6 +33,7 @@ ELEVENLABS_VOICES_ENDPOINT = "https://api.elevenlabs.io/v2/voices"
 def synthesize(text, voice=None, model=None, provider=None):
     """MP3 bytes for text from the configured provider."""
     provider = provider or config.provider()
+    _provider_status(provider)
     if provider == "elevenlabs":
         try:
             return _elevenlabs(text, voice, model)
@@ -27,10 +44,12 @@ def synthesize(text, voice=None, model=None, provider=None):
             if config.api_key():
                 try:
                     config.log("synth fallback elevenlabs -> openai")
+                    _provider_status("openai", "elevenlabs")
                     return _openai(text, config.OPENAI_FALLBACK_VOICE)
                 except RuntimeError:
                     config.mark_tts_fallback("openai")
             config.log("synth fallback -> macos")
+            _provider_status("macos", "elevenlabs")
             return _macos(text)
     if provider != "openai":
         if provider == "macos":
@@ -43,6 +62,7 @@ def synthesize(text, voice=None, model=None, provider=None):
             raise
         config.mark_tts_fallback("openai")
         config.log("synth fallback openai -> macos")
+        _provider_status("macos", "openai")
         return _macos(text)
 
 

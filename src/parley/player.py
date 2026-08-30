@@ -15,11 +15,15 @@ import subprocess
 import tempfile
 import time
 
-from parley import config
+from parley import config, runtime
 from parley.tts import synthesize
 
 SENTENCE_BOUNDARY = re.compile(r'''[.!?]["'\u2019\u201d)\]]*(?=\s)''')
 RESUME_REWIND_SECONDS = 0.25
+
+
+class PlaybackError(RuntimeError):
+    """The local audio process failed without an intentional interruption."""
 
 
 def chunks(text, limit=None):
@@ -69,6 +73,7 @@ def enqueue(text, voice=None, model=None):
         tmp.rename(config.QUEUE / name)
     from parley import indicator
 
+    runtime.refresh_queue()
     indicator.refresh()
     return True
 
@@ -164,8 +169,10 @@ def play(audio, interrupt=None, skip=None):
                 return False
             if skip is not None and _skip_token() != skip:
                 return True
-            if _pause_token() == pause_token or returncode == 0:
+            if returncode == 0:
                 return True
+            if _pause_token() == pause_token:
+                raise PlaybackError(f"afplay exited with status {returncode}")
             offset = max(
                 0.001, offset + elapsed - RESUME_REWIND_SECONDS)
             config.log(f"speech checkpointed at {offset:.2f}s")
@@ -293,10 +300,13 @@ def drain():
     except OSError:
         return False
 
+    writer = runtime.claim("speech")
+    runtime.set_speech(writer, synthesis="idle", playback="idle")
     woke = False
     spoke = False
+    last_failure = None
     interrupt = _interrupt_token()
-    config.DRAIN_PID.write_text(str(os.getpid()))
+    config.private_write(config.DRAIN_PID, str(os.getpid()))
     try:
         while True:
             items = _pending()
@@ -320,17 +330,34 @@ def drain():
                 item.unlink(missing_ok=True)
                 continue
             item.unlink(missing_ok=True)
+            runtime.refresh_queue()
             skip = _skip_token()
+            stage = "synthesize"
+            job_provider = job.get("provider", "unknown")
+            safe_provider = (
+                job_provider
+                if isinstance(job_provider, str)
+                and job_provider in runtime.ACTIVE_PROVIDERS
+                else "unknown"
+            )
             try:
+                last_failure = None
+                runtime.set_provider(writer, safe_provider)
+                runtime.set_speech(
+                    writer, synthesis="active", playback="idle")
                 started = time.time()
-                audio = synthesize(
-                    job["text"], job.get("voice"), job.get("model"),
-                    job.get("provider"),
-                )
+                with runtime.writer_context(writer):
+                    audio = synthesize(
+                        job["text"], job.get("voice"), job.get("model"),
+                        job.get("provider"),
+                    )
                 config.log(
                     f"spoke {job.get('voice')} {len(job['text'])}c "
                     f"synth={time.time() - started:.1f}s {len(audio)}b"
                 )
+                stage = "play"
+                runtime.set_speech(
+                    writer, synthesis="idle", playback="active")
                 if _interrupt_token() != interrupt:
                     config.log("speech interrupted before playback")
                     return True
@@ -360,14 +387,41 @@ def drain():
                     spoke = False
                     continue
                 spoke = True
-            except Exception as exc:
-                config.log(f"error: {exc}")
+                runtime.set_speech(
+                    writer, synthesis="idle", playback="idle")
+            except Exception:
+                last_failure = stage
+                if stage == "synthesize":
+                    runtime.set_speech(
+                        writer, synthesis="degraded", playback="idle")
+                    runtime.record_error(
+                        writer,
+                        "synthesis_failed", "speech", "synthesize",
+                        safe_provider,
+                    )
+                else:
+                    runtime.set_speech(
+                        writer, synthesis="idle", playback="degraded")
+                    runtime.record_error(
+                        writer,
+                        "playback_failed", "speech", "play",
+                        safe_provider,
+                    )
+                config.log(
+                    f"speech failure provider={safe_provider} "
+                    f"stage={stage}")
     finally:
         try:
             if config.DRAIN_PID.read_text().strip() == str(os.getpid()):
                 config.DRAIN_PID.unlink(missing_ok=True)
         except OSError:
             pass
+        runtime.refresh_queue()
+        runtime.release(
+            writer,
+            synthesis="degraded" if last_failure == "synthesize" else "idle",
+            playback="degraded" if last_failure == "play" else "idle",
+        )
         try:
             fcntl.flock(lock, fcntl.LOCK_UN)
             lock.close()
@@ -396,6 +450,7 @@ def stop():
     except OSError:
         pass
     config.SPEECH_PID.unlink(missing_ok=True)
+    runtime.refresh_queue()
 
 
 def skip():

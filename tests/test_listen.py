@@ -15,12 +15,15 @@ from parley.listen import (
 
 @pytest.fixture(autouse=True)
 def isolate_microphone_turn(tmp_path, monkeypatch):
+    monkeypatch.setattr(listen.config, "STATE", tmp_path)
     monkeypatch.setattr(listen.player, "pause", lambda: False)
     monkeypatch.setattr(listen.player, "resume", lambda: False)
     monkeypatch.setattr(listen.player, "microphone_active", lambda: False)
     monkeypatch.setattr(listen.player, "output_playing", lambda: False)
     monkeypatch.setattr(listen.config, "LISTENER_STATE", tmp_path / "listener.state")
     monkeypatch.setattr(listen.config, "TRIGGERS", tmp_path / "triggers")
+    monkeypatch.setattr(listen, "TARGET", tmp_path / "target")
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
     listen.triggers.load.cache_clear()
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
 

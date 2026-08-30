@@ -49,13 +49,15 @@ def _badge():
 
 def text(viewing_pane=""):
     """Badge content, including the listener's current operational state."""
-    from parley import hooks, listen
+    from parley import hooks, runtime
 
-    if not listen.is_running():
+    snapshot = runtime.snapshot()
+    state = snapshot["listener"]["state"]
+    if state == "off":
         return ""
     if viewing_pane and not hooks.pane_is_on(viewing_pane):
         return ""
-    pane = listen.get_target()
+    pane = snapshot["target"]["id"] or ""
     _target_session, label = _session(pane)
     if viewing_pane and pane == viewing_pane:
         target = " · THIS PANE"
@@ -66,12 +68,17 @@ def text(viewing_pane=""):
     else:
         target = f" · TARGET {pane or '(none)'} UNAVAILABLE"
         warning = "⚠ "
-    state = listen.listener_state()
     if state == "capturing":
         status = "🔴 PARLEY LISTENING"
     elif state == "sending":
         status = "⏳ PARLEY SENDING"
-    elif listen.speaking():
+    elif state == "degraded":
+        status = "⚠ PARLEY DEGRADED"
+    elif (
+        snapshot["queue"]["depth"]
+        or snapshot["speech"]["synthesis"] == "active"
+        or snapshot["speech"]["playback"] in {"active", "paused"}
+    ):
         status = "🔊 PARLEY SPEAKING · MIC READY"
     else:
         status = "🎙 PARLEY READY"
