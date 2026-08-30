@@ -25,3 +25,29 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest
       - run: uv build
+
+  native:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --locked --dev
+      - run: swift format lint --recursive macos/ParleyMenuBar
+      - run: swift run --package-path macos/ParleyMenuBar ParleyCoreTests
+      - run: macos/ParleyMenuBar/Scripts/build-app.sh
+      - run: macos/ParleyMenuBar/Scripts/test-release.sh
+      - name: Build and verify credential-free universal artifact
+        run: |
+          version=$(macos/ParleyMenuBar/Scripts/release.py version)
+          macos/ParleyMenuBar/Scripts/release.py build \
+            --version "$version" --ad-hoc
+          artifact_file=".artifacts/release/ParleyMenuBar-$version-macos-universal2-adhoc.zip"
+          macos/ParleyMenuBar/Scripts/release.py verify \
+            --artifact "$artifact_file" \
+            --checksum "$artifact_file.sha256" \
+            --version "$version" \
+            --architectures arm64 x86_64 \
+            --signature ad-hoc

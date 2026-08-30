@@ -118,6 +118,12 @@ macos/ParleyMenuBar/Scripts/build-app.sh
 open macos/ParleyMenuBar/.build/ParleyMenuBar.app
 ```
 
+The app and CLI share the version in `pyproject.toml`; runtime API compatibility
+is enforced by the versioned status contract. Normalized universal release
+packaging, checksum/signature verification, signing/notarization inputs, and
+non-destructive install/update/rollback guidance are documented in the
+[native packaging guide](macos/ParleyMenuBar/README.md#release-contract).
+
 Set `PARLEY_CLI=/absolute/path/to/parley` when exercising a checkout whose CLI
 is not the currently installed `parley`. The menu clearly degrades when the CLI
 is absent, incompatible, or points at an unavailable tmux target; controls that
