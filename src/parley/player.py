@@ -20,6 +20,8 @@ from parley.tts import synthesize
 
 SENTENCE_BOUNDARY = re.compile(r'''[.!?]["'\u2019\u201d)\]]*(?=\s)''')
 RESUME_REWIND_SECONDS = 0.25
+OWNER_PATTERN = re.compile(r"owner-[0-9a-f]{32}\Z")
+REVISION_PATTERN = re.compile(r"[0-9]{0,32}\Z")
 
 
 def chunks(text, limit=None):
@@ -46,10 +48,46 @@ def chunks(text, limit=None):
         yield remaining
 
 
-def enqueue(text, voice=None, model=None):
+def _valid_owner(owner):
+    return isinstance(owner, str) and bool(OWNER_PATTERN.fullmatch(owner))
+
+
+def _atomic_private_write(path, content):
+    """Publish coordination metadata without exposing a partial value."""
+    config.private_directory(path.parent)
+    temporary = path.with_name(
+        f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        config.private_write(temporary, content)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _cancellation_path(owner):
+    if not _valid_owner(owner):
+        return None
+    return config.CANCELLATIONS / owner
+
+
+def owner_revision(owner):
+    """Current bounded cancellation generation for an automatic target."""
+    path = _cancellation_path(owner)
+    if path is None:
+        return ""
+    try:
+        revision = path.read_text().strip()
+    except OSError:
+        return ""
+    return revision if REVISION_PATTERN.fullmatch(revision) else ""
+
+
+def enqueue(text, voice=None, model=None, owner=None, revision=None):
     text = (text or "").strip()
     if not text:
         return False
+    if owner is not None and not _valid_owner(owner):
+        raise ValueError("queue owner must be an opaque Parley owner token")
     config.private_directory(config.QUEUE)
     provider = config.provider()
     voice = voice or config.active_voice()
@@ -62,6 +100,14 @@ def enqueue(text, voice=None, model=None):
             "voice": voice,
             "model": model,
         }
+        if owner is not None:
+            queued_revision = (
+                owner_revision(owner) if revision is None else str(revision)
+            )
+            if not REVISION_PATTERN.fullmatch(queued_revision):
+                raise ValueError("queue owner revision is invalid")
+            item["owner"] = owner
+            item["owner_revision"] = queued_revision
         name = f"{timestamp:020d}-{os.getpid()}-{index:04d}.json"
         # Write then rename so a drainer never sees a half-written item.
         tmp = config.QUEUE / (name + ".tmp")
@@ -129,6 +175,8 @@ def play(audio, interrupt=None, skip=None):
         path = fh.name
     try:
         while True:
+            if _active_cancelled():
+                return True
             if skip is not None and _skip_token() != skip:
                 return True
             if not _wait_for_microphone(interrupt):
@@ -153,6 +201,8 @@ def play(audio, interrupt=None, skip=None):
                 proc.terminate()
             if skip is not None and _skip_token() != skip:
                 proc.terminate()
+            if _active_cancelled():
+                proc.terminate()
             returncode = proc.wait()
             elapsed = max(0.0, time.monotonic() - started)
             try:
@@ -162,6 +212,8 @@ def play(audio, interrupt=None, skip=None):
                 pass
             if interrupt is not None and _interrupt_token() != interrupt:
                 return False
+            if _active_cancelled():
+                return True
             if skip is not None and _skip_token() != skip:
                 return True
             if _pause_token() == pause_token or returncode == 0:
@@ -198,6 +250,56 @@ def _pending():
     return sorted(p for p in config.QUEUE.iterdir() if p.suffix == ".json")
 
 
+def _job_cancelled(job):
+    owner = job.get("owner")
+    if not _valid_owner(owner):
+        # Legacy and manual items are intentionally outside target cancellation.
+        return False
+    revision = str(job.get("owner_revision", ""))
+    return revision != owner_revision(owner)
+
+
+def _set_active(job):
+    owner = job.get("owner") if _valid_owner(job.get("owner")) else None
+    revision = str(job.get("owner_revision", "")) if owner else ""
+    active = {"owner": owner, "owner_revision": revision, "pid": os.getpid()}
+    _atomic_private_write(config.ACTIVE, json.dumps(active, separators=(",", ":")))
+
+
+def _active_job():
+    try:
+        active = json.loads(config.ACTIVE.read_text())
+        pid = int(active["pid"])
+    except (OSError, ValueError, TypeError, KeyError):
+        config.ACTIVE.unlink(missing_ok=True)
+        return None
+    if not _pid_alive_value(pid):
+        config.ACTIVE.unlink(missing_ok=True)
+        config.log("recovered stale active ownership metadata")
+        return None
+    owner = active.get("owner")
+    if owner is not None and not _valid_owner(owner):
+        return None
+    return active
+
+
+def _active_cancelled():
+    active = _active_job()
+    if not active or not active.get("owner"):
+        return False
+    return str(active.get("owner_revision", "")) != owner_revision(
+        active["owner"])
+
+
+def _clear_active():
+    try:
+        active = json.loads(config.ACTIVE.read_text())
+        if int(active.get("pid", -1)) == os.getpid():
+            config.ACTIVE.unlink(missing_ok=True)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
 def _interrupt_token():
     try:
         return config.INTERRUPT.read_text().strip()
@@ -212,13 +314,20 @@ def _skip_token():
         return ""
 
 
+def _pid_alive_value(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def _pid_alive(path):
     try:
         pid = int(path.read_text().strip())
-        os.kill(pid, 0)
-        return True
     except (OSError, ValueError):
         return False
+    return _pid_alive_value(pid)
 
 
 def microphone_active():
@@ -240,10 +349,15 @@ def output_playing():
 def _wait_for_microphone(interrupt=None):
     """Hold spoken output behind an exclusive microphone turn."""
     while microphone_active():
+        if _active_cancelled():
+            return False
         if interrupt is not None and _interrupt_token() != interrupt:
             return False
         time.sleep(0.05)
-    return interrupt is None or _interrupt_token() == interrupt
+    return (
+        not _active_cancelled()
+        and (interrupt is None or _interrupt_token() == interrupt)
+    )
 
 
 def _signal_speech(sig):
@@ -320,8 +434,18 @@ def drain():
                 item.unlink(missing_ok=True)
                 continue
             item.unlink(missing_ok=True)
+            if not isinstance(job, dict):
+                continue
+            if _job_cancelled(job):
+                config.log("target-canceled queued speech block discarded")
+                continue
             skip = _skip_token()
+            _set_active(job)
             try:
+                # cancel() can race the gap between dequeue and active publish.
+                if _job_cancelled(job):
+                    config.log("target-canceled active speech before synthesis")
+                    continue
                 started = time.time()
                 audio = synthesize(
                     job["text"], job.get("voice"), job.get("model"),
@@ -334,11 +458,17 @@ def drain():
                 if _interrupt_token() != interrupt:
                     config.log("speech interrupted before playback")
                     return True
+                if _job_cancelled(job):
+                    config.log("target-canceled speech before playback")
+                    continue
                 if _skip_token() != skip:
                     config.log("speech block skipped before playback")
                     spoke = False
                     continue
                 if not _wait_for_microphone(interrupt):
+                    if _job_cancelled(job):
+                        config.log("target-canceled speech waiting for microphone")
+                        continue
                     return True
                 if not woke:
                     _wake_output()
@@ -346,15 +476,24 @@ def drain():
                 if _interrupt_token() != interrupt:
                     config.log("speech interrupted during output warm-up")
                     return True
+                if _job_cancelled(job):
+                    config.log("target-canceled speech during output warm-up")
+                    continue
                 if _skip_token() != skip:
                     config.log("speech block skipped during output warm-up")
                     spoke = False
                     continue
                 if not _wait_for_microphone(interrupt):
+                    if _job_cancelled(job):
+                        config.log("target-canceled speech waiting for microphone")
+                        continue
                     return True
                 play(audio, interrupt, skip)
                 if _interrupt_token() != interrupt:
                     return True
+                if _job_cancelled(job):
+                    config.log("target-canceled speech during playback")
+                    continue
                 if _skip_token() != skip:
                     config.log("speech block skipped during playback")
                     spoke = False
@@ -362,6 +501,8 @@ def drain():
                 spoke = True
             except Exception as exc:
                 config.log(f"error: {exc}")
+            finally:
+                _clear_active()
     finally:
         try:
             if config.DRAIN_PID.read_text().strip() == str(os.getpid()):
@@ -375,8 +516,52 @@ def drain():
             pass
 
 
+def cancel(owner):
+    """Cancel only one automatic target's existing speech.
+
+    Unowned manual and legacy queue items are deliberately preserved. The
+    generation changes before the queue scan so jobs already detached from a
+    hook cannot escape an Off race by arriving slightly later.
+    """
+    path = _cancellation_path(owner)
+    if path is None:
+        return False
+    previous = owner_revision(owner)
+    revision = str(time.time_ns())
+    if revision == previous:
+        revision = str(int(revision) + 1)
+    _atomic_private_write(path, revision)
+
+    removed = 0
+    for item in _pending():
+        try:
+            job = json.loads(item.read_text())
+        except (OSError, ValueError):
+            continue
+        if (isinstance(job, dict) and job.get("owner") == owner
+                and _job_cancelled(job)):
+            try:
+                item.unlink()
+                removed += 1
+            except OSError:
+                pass
+
+    active = _active_job()
+    matched_active = bool(active and active.get("owner") == owner)
+    signaled = _signal_speech(signal.SIGTERM) if matched_active else False
+    config.log(
+        f"target speech canceled queued={removed} "
+        f"active={'yes' if matched_active else 'no'} "
+        f"signaled={'yes' if signaled else 'no'}"
+    )
+    from parley import indicator
+
+    indicator.refresh()
+    return bool(removed or matched_active)
+
+
 def stop():
-    """Permanently discard current and queued speech."""
+    """Globally and permanently discard current and queued speech."""
     config.STATE.mkdir(parents=True, exist_ok=True)
     config.INTERRUPT.write_text(str(time.time_ns()))
     config.MIC_TURN.unlink(missing_ok=True)

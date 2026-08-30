@@ -6,7 +6,7 @@ import sys
 import time
 
 from parley import __version__, config, hooks
-from parley.player import detach, drain, enqueue, stop
+from parley.player import cancel, detach, drain, enqueue, stop
 
 
 def _report(keys):
@@ -28,14 +28,16 @@ def build_parser():
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("on", help="speak replies in this session")
-    sub.add_parser("off", help="stop speaking in this session")
+    sub.add_parser(
+        "off", help="stop and cancel speech only for this session")
     sub.add_parser("toggle", help="flip this session")
     sub.add_parser("status", help="show this session's state")
 
     default = sub.add_parser("default", help="what new sessions start as")
     default.add_argument("state", nargs="?", choices=["on", "off"])
 
-    say = sub.add_parser("say", help="queue a line (status updates, asides)")
+    say = sub.add_parser(
+        "say", help="queue a global line (not owned by this session)")
     say.add_argument("text", nargs="+")
     say.add_argument("--voice", help="OpenAI voice name or ElevenLabs voice ID")
     say.add_argument("--model")
@@ -55,7 +57,8 @@ def build_parser():
     enroll.add_argument("--device", default=os.environ.get("PARLEY_MIC", "0"),
                         help="avfoundation audio device index")
 
-    sub.add_parser("stop", help="drop the queue and stop playing")
+    sub.add_parser(
+        "stop", help="GLOBAL Stop Speech: drop all queued and active speech")
     sub.add_parser("cues", help="regenerate the notification tones")
 
     for name, help_text in [("install", "add the hook to your agent's settings"),
@@ -121,8 +124,9 @@ def main(argv=None):
         if command == "on":
             hooks.turn_on(keys)
         elif command == "off":
+            owner = hooks.session_owner(keys)
             hooks.turn_off(keys)
-            stop()
+            cancel(owner)
         from parley import indicator
 
         indicator.refresh()
@@ -210,7 +214,7 @@ def main(argv=None):
 
     if command == "stop":
         stop()
-        print("parley: queue cleared")
+        print("parley: Stop Speech (global): active and queued speech cleared")
         return
 
     if command == "say":

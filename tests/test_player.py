@@ -1,3 +1,5 @@
+import json
+import os
 import re
 import stat
 import threading
@@ -12,7 +14,9 @@ from parley import config, indicator, player
 def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE", tmp_path)
     monkeypatch.setattr(config, "QUEUE", tmp_path / "queue")
+    monkeypatch.setattr(config, "CANCELLATIONS", tmp_path / "cancellations")
     monkeypatch.setattr(config, "LOCK", tmp_path / "player.lock")
+    monkeypatch.setattr(config, "ACTIVE", tmp_path / "active.json")
     monkeypatch.setattr(config, "PIDFILE", tmp_path / "playing.pid")
     monkeypatch.setattr(config, "SPEECH_PID", tmp_path / "speech.pid")
     monkeypatch.setattr(config, "DRAIN_PID", tmp_path / "drainer.pid")
@@ -22,6 +26,10 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "INTERRUPT", tmp_path / "interrupt")
     monkeypatch.setattr(config, "SKIP", tmp_path / "skip")
     monkeypatch.setattr(indicator, "refresh", lambda: None)
+
+
+OWNER_A = "owner-" + "a" * 32
+OWNER_B = "owner-" + "b" * 32
 
 
 @pytest.fixture
@@ -154,6 +162,212 @@ def test_queued_reply_is_private_on_disk():
     queued = player._pending()[0]
     assert stat.S_IMODE(queued.stat().st_mode) == 0o600
     assert stat.S_IMODE(config.QUEUE.stat().st_mode) == 0o700
+
+
+def test_automatic_queue_owner_is_bounded_private_and_not_in_filename():
+    player.enqueue(
+        "private reply content",
+        owner=OWNER_A,
+        revision=player.owner_revision(OWNER_A),
+    )
+
+    queued = player._pending()[0]
+    job = json.loads(queued.read_text())
+    assert job["owner"] == OWNER_A
+    assert job["owner_revision"] == ""
+    assert len(job["owner"]) == 38
+    assert "private" not in queued.name
+    assert "reply" not in queued.name
+    assert stat.S_IMODE(queued.stat().st_mode) == 0o600
+
+
+def test_target_cancel_preserves_other_owner_legacy_manual_and_order(recorder):
+    player.enqueue("a one", owner=OWNER_A)
+    player.enqueue("b one", owner=OWNER_B)
+    player.enqueue("a two", owner=OWNER_A)
+    player.enqueue("legacy manual")
+    player.enqueue("b two", owner=OWNER_B)
+    interrupt = player._interrupt_token()
+    skip = player._skip_token()
+
+    assert player.cancel(OWNER_A)
+    remaining = [json.loads(path.read_text())["text"] for path in player._pending()]
+    assert remaining == ["b one", "legacy manual", "b two"]
+    assert player._interrupt_token() == interrupt
+    assert player._skip_token() == skip
+
+    player.drain()
+
+    assert recorder == ["b one", "legacy manual", "b two"]
+    assert OWNER_A not in config.LOG.read_text()
+
+
+def test_target_cancel_does_not_claim_malformed_or_legacy_ownership(recorder):
+    player.enqueue("legacy unowned")
+    queued = player._pending()[0]
+    job = json.loads(queued.read_text())
+    job["owner"] = "pane-%42-with-a-title"
+    queued.write_text(json.dumps(job))
+
+    assert not player.cancel(OWNER_A)
+    player.drain()
+
+    assert recorder == ["legacy unowned"]
+
+
+def test_global_stop_clears_owned_manual_and_legacy_items():
+    player.enqueue("owned", owner=OWNER_A)
+    player.enqueue("manual or legacy")
+
+    player.stop()
+
+    assert player._pending() == []
+
+
+def test_cancel_active_owner_during_synthesis_continues_other_target(
+        monkeypatch):
+    synthesis_started = threading.Event()
+    release_synthesis = threading.Event()
+    played = []
+
+    def synthesize(text, voice, model, provider):
+        if text == "a active private block":
+            synthesis_started.set()
+            assert release_synthesis.wait(timeout=2)
+        return text.encode()
+
+    monkeypatch.setattr(player, "synthesize", synthesize)
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(
+        player,
+        "play",
+        lambda audio, interrupt=None, skip=None: played.append(audio.decode()),
+    )
+    player.enqueue("a active private block", owner=OWNER_A)
+    player.enqueue("b remains audible", owner=OWNER_B)
+    thread = threading.Thread(target=player.drain)
+    thread.start()
+    assert synthesis_started.wait(timeout=2)
+
+    active = config.ACTIVE.read_text()
+    assert OWNER_A in active
+    assert "a active private block" not in active
+    assert stat.S_IMODE(config.ACTIVE.stat().st_mode) == 0o600
+    assert player.cancel(OWNER_A)
+    release_synthesis.set()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert played == ["b remains audible"]
+    assert not config.ACTIVE.exists()
+
+
+def test_cancel_pending_owner_does_not_interrupt_other_active_target(monkeypatch):
+    config.private_write(
+        config.ACTIVE,
+        json.dumps({
+            "owner": OWNER_A,
+            "owner_revision": player.owner_revision(OWNER_A),
+            "pid": os.getpid(),
+        }),
+    )
+    config.SPEECH_PID.write_text("4242")
+    player.enqueue("b pending", owner=OWNER_B)
+    signals = []
+
+    def fake_kill(pid, sig):
+        signals.append((pid, sig))
+
+    monkeypatch.setattr(player.os, "kill", fake_kill)
+
+    assert player.cancel(OWNER_B)
+
+    assert player._pending() == []
+    assert (4242, player.signal.SIGTERM) not in signals
+    assert json.loads(config.ACTIVE.read_text())["owner"] == OWNER_A
+
+
+def test_off_race_at_audio_launch_terminates_only_canceled_owner(monkeypatch):
+    from parley import cues
+
+    launched = []
+
+    class Process:
+        def __init__(self):
+            self.pid = 7000 + len(launched)
+            self.terminated = False
+            launched.append(self)
+            if len(launched) == 1:
+                # cancel() runs before play() publishes SPEECH_PID. The launch
+                # window check must still terminate this newly created process.
+                player.cancel(OWNER_A)
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self):
+            return -player.signal.SIGTERM if self.terminated else 0
+
+    def fake_kill(pid, sig):
+        if sig == 0 and pid == os.getpid():
+            return
+        if sig == 0:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(player, "synthesize", lambda text, v, m, p: text.encode())
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(cues, "play", lambda name: None)
+    monkeypatch.setattr(player.subprocess, "Popen", lambda argv: Process())
+    monkeypatch.setattr(player.os, "kill", fake_kill)
+    player.enqueue("cancel in launch window", owner=OWNER_A)
+    player.enqueue("other target after race", owner=OWNER_B)
+
+    player.drain()
+
+    assert len(launched) == 2
+    assert launched[0].terminated
+    assert not launched[1].terminated
+
+
+def test_detached_hook_enqueue_after_off_keeps_old_generation_canceled(
+        recorder):
+    captured_revision = player.owner_revision(OWNER_A)
+
+    player.cancel(OWNER_A)
+    player.enqueue(
+        "late detached automatic reply",
+        owner=OWNER_A,
+        revision=captured_revision,
+    )
+    player.enqueue("other target", owner=OWNER_B)
+    player.drain()
+
+    assert recorder == ["other target"]
+
+
+def test_stale_active_owner_is_cleaned_without_signaling_audio(monkeypatch):
+    config.private_write(
+        config.ACTIVE,
+        json.dumps({
+            "owner": OWNER_A,
+            "owner_revision": "",
+            "pid": 999999,
+        }),
+    )
+    config.SPEECH_PID.write_text("4242")
+    signals = []
+
+    def fake_kill(pid, sig):
+        if pid == 999999 and sig == 0:
+            raise ProcessLookupError
+        signals.append((pid, sig))
+
+    monkeypatch.setattr(player.os, "kill", fake_kill)
+
+    assert not player.cancel(OWNER_A)
+
+    assert signals == []
+    assert not config.ACTIVE.exists()
 
 
 def test_stop_clears_the_queue(monkeypatch):

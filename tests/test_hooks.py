@@ -11,6 +11,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE", tmp_path)
     monkeypatch.setattr(config, "SESSIONS", tmp_path / "sessions")
     monkeypatch.setattr(config, "SPOKEN", tmp_path / "spoken")
+    monkeypatch.setattr(config, "CANCELLATIONS", tmp_path / "cancellations")
     monkeypatch.setattr(config, "DEFAULT", tmp_path / "default")
     monkeypatch.setattr(hooks, "TARGETS", {"claude-code": tmp_path / "settings.json",
                                            "codex": tmp_path / "hooks.json"})
@@ -72,6 +73,35 @@ def test_matching_any_identity_counts(monkeypatch):
     hooks.turn_on(hooks.session_keys({"session_id": "s1"}))
     monkeypatch.delenv("TMUX_PANE")
     assert hooks.is_on(hooks.session_keys({"session_id": "s1"}))
+
+
+def test_target_aliases_share_one_bounded_opaque_owner(monkeypatch):
+    monkeypatch.setenv("TMUX_PANE", "%42-secret-name")
+    monkeypatch.setenv("CODEX_THREAD_ID", "private-thread-title")
+    keys = hooks.session_keys()
+
+    hooks.turn_on(keys)
+
+    owners = [(config.SESSIONS / key).read_text() for key in keys]
+    assert len(set(owners)) == 1
+    assert hooks.OWNER_PATTERN.fullmatch(owners[0])
+    assert "%42" not in owners[0]
+    assert "private-thread-title" not in owners[0]
+
+    hooks.turn_off([keys[0]])
+
+    assert not any((config.SESSIONS / key).exists() for key in keys)
+
+
+def test_empty_legacy_marker_gets_stable_non_content_owner():
+    config.SESSIONS.mkdir(parents=True)
+    (config.SESSIONS / "pane-_42").touch()
+
+    first = hooks.session_owner(["pane-_42"])
+    second = hooks.session_owner(["pane-_42"])
+
+    assert first == second
+    assert hooks.OWNER_PATTERN.fullmatch(first)
 
 
 def test_reply_read_from_a_direct_message():
@@ -167,13 +197,21 @@ def test_automatic_reply_is_enqueued_with_its_session_name(monkeypatch):
     queued = []
     monkeypatch.setattr(hooks, "reply_from", lambda payload: ("reply-1", "hello"))
     monkeypatch.setattr(hooks, "session_label", lambda payload: "windy-falcon")
-    monkeypatch.setattr(hooks, "enqueue", queued.append)
+    monkeypatch.setattr(
+        hooks,
+        "enqueue",
+        lambda text, **metadata: queued.append((text, metadata)),
+    )
     monkeypatch.setattr(hooks, "drain", lambda: None)
     monkeypatch.setattr(hooks.time, "sleep", lambda seconds: None)
 
-    hooks.speak_reply("pane-42", {})
+    owner = "owner-" + "a" * 32
+    hooks.speak_reply("pane-42", {}, owner, "123")
 
-    assert queued == ["Session windy-falcon. hello"]
+    assert queued == [(
+        "Session windy-falcon. hello",
+        {"owner": owner, "revision": "123"},
+    )]
 
 
 def test_malformed_payload_is_survivable(monkeypatch):

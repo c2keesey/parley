@@ -37,6 +37,7 @@ TIMEOUT = 10
 SESSION_VARS = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID")
 DIRECT_KEYS = ("last-assistant-message", "last_assistant_message",
                "assistant_message", "message", "text")
+OWNER_PATTERN = re.compile(r"owner-[0-9a-f]{32}\Z")
 
 
 def _clean(value):
@@ -118,10 +119,33 @@ def is_on(keys):
     return any((config.SESSIONS / k).exists() for k in keys)
 
 
-def turn_on(keys):
-    config.SESSIONS.mkdir(parents=True, exist_ok=True)
+def session_owner(keys):
+    """A private, fixed-size queue owner shared by a target's aliases.
+
+    New markers contain the opaque owner so pane and harness-session aliases
+    resolve to one cancellation scope. Empty markers from earlier releases
+    remain usable through a deterministic, non-content fallback.
+    """
     for key in keys:
-        (config.SESSIONS / key).touch()
+        try:
+            owner = (config.SESSIONS / key).read_text().strip()
+        except OSError:
+            continue
+        if OWNER_PATTERN.fullmatch(owner):
+            return owner
+    identity = next(
+        (key for key in keys if (config.SESSIONS / key).exists()),
+        keys[0] if keys else "default",
+    )
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:32]
+    return f"owner-{digest}"
+
+
+def turn_on(keys):
+    config.private_directory(config.SESSIONS)
+    owner = session_owner(keys)
+    for key in keys:
+        config.private_write(config.SESSIONS / key, owner)
     cutoff = time.time() - 7 * 86400
     for marker in config.SESSIONS.iterdir():
         try:
@@ -132,8 +156,23 @@ def turn_on(keys):
 
 
 def turn_off(keys):
+    owner = session_owner(keys)
     for key in keys:
         (config.SESSIONS / key).unlink(missing_ok=True)
+    # New markers persist one shared opaque owner across pane and harness-id
+    # aliases. Remove every alias, including identities absent from the shell
+    # that invoked Off. Empty legacy markers cannot be linked safely and are
+    # removed only when explicitly present in keys.
+    try:
+        markers = list(config.SESSIONS.iterdir())
+    except OSError:
+        markers = []
+    for marker in markers:
+        try:
+            if marker.read_text().strip() == owner:
+                marker.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def reply_from(payload):
@@ -151,7 +190,8 @@ def reply_from(payload):
     return "", ""
 
 
-def speak_reply(marker_key, payload):
+def speak_reply(marker_key, payload, owner=None, owner_revision=None,
+                enabled_keys=None):
     """Speak this turn's reply, waiting for it if the hook fired early."""
     seen = config.SPOKEN / marker_key
     try:
@@ -180,9 +220,18 @@ def speak_reply(marker_key, payload):
             break
         reply_id, text = newer_id, newer_text
 
-    seen.parent.mkdir(parents=True, exist_ok=True)
-    seen.write_text(reply_id)
-    enqueue(label_reply(text, payload))
+    # handle() snapshots the cancellation generation before detaching. If Off
+    # races this final check, the old generation on the job still cancels it.
+    if enabled_keys is not None and not is_on(enabled_keys):
+        config.log("automatic reply canceled: target voice is off")
+        return
+
+    config.private_write(seen, reply_id)
+    enqueue(
+        label_reply(text, payload),
+        owner=owner,
+        revision=owner_revision,
+    )
     drain()
 
 
@@ -209,7 +258,11 @@ def handle(stream=None, argv=None):
     keys = session_keys(payload)
     if not is_on(keys):
         return
-    detach(lambda: speak_reply(keys[0], payload))
+    owner = session_owner(keys)
+    from parley.player import owner_revision
+
+    revision = owner_revision(owner)
+    detach(lambda: speak_reply(keys[0], payload, owner, revision, keys))
 
 
 def _load(path):

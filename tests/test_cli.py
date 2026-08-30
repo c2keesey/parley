@@ -1,6 +1,55 @@
 """Command-line behavior tests."""
 
-from parley import cli, listen, triggers
+import json
+
+from parley import cli, config, hooks, listen, player, triggers
+
+
+def test_off_cancels_only_its_opaque_target_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "SESSIONS", tmp_path / "sessions")
+    monkeypatch.setenv("TMUX_PANE", "%target-a")
+    keys = hooks.session_keys()
+    hooks.turn_on(keys)
+    owner = hooks.session_owner(keys)
+    canceled = []
+    monkeypatch.setattr(cli, "cancel", canceled.append)
+    monkeypatch.setattr(
+        cli,
+        "stop",
+        lambda: (_ for _ in ()).throw(AssertionError("Off must not stop globally")),
+    )
+    monkeypatch.setattr(cli, "_report", lambda keys: None)
+    monkeypatch.setattr("parley.indicator.refresh", lambda: None)
+
+    cli.main(["off"])
+
+    assert canceled == [owner]
+    assert not hooks.is_on(keys)
+
+
+def test_manual_say_is_unowned_and_global(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "STATE", tmp_path)
+    monkeypatch.setattr(config, "QUEUE", tmp_path / "queue")
+    monkeypatch.setattr(config, "CANCELLATIONS", tmp_path / "cancellations")
+    monkeypatch.setattr(cli, "detach", lambda fn: None)
+    monkeypatch.setattr("parley.indicator.refresh", lambda: None)
+
+    cli.main(["say", "manual", "status"])
+
+    job = json.loads(player._pending()[0].read_text())
+    assert job["text"] == "manual status"
+    assert "owner" not in job
+
+
+def test_stop_is_explicitly_global_in_help_and_output(monkeypatch, capsys):
+    stopped = []
+    monkeypatch.setattr(cli, "stop", lambda: stopped.append(True))
+
+    assert "GLOBAL Stop Speech" in cli.build_parser().format_help()
+    cli.main(["stop"])
+
+    assert stopped == [True]
+    assert "Stop Speech (global)" in capsys.readouterr().out
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
