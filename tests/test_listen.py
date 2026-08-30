@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -27,6 +28,10 @@ def isolate_microphone_turn(tmp_path, monkeypatch):
         listen.config, "CUE_PROCESSES", tmp_path / "cue-processes"
     )
     monkeypatch.setattr(listen.config, "TRIGGERS", tmp_path / "triggers")
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "LISTEN_LOCK", tmp_path / "listener.lock")
+    monkeypatch.setattr(listen, "TARGET", tmp_path / "target")
+    monkeypatch.setattr(listen, "ffmpeg_bin", lambda: "/mock/ffmpeg")
     listen.triggers.load.cache_clear()
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
     monkeypatch.setattr(
@@ -221,12 +226,25 @@ class FakeAudioProcess:
     def terminate(self):
         pass
 
+    def poll(self):
+        return None
+
 
 def audio_chunks(voiced_frames):
     loud = b"\xff\x7f" * listen.FRAME
     quiet = b"\x00\x00" * listen.FRAME
     silence_frames = int(listen.END_SILENCE * listen.RATE / listen.FRAME) + 1
     return [loud] * voiced_frames + [quiet] * silence_frames
+
+
+def ready_bursts(items):
+    """An isolated capture stream that completes the startup handshake."""
+    def generate(device, reserve_output=True, on_ready=None):
+        if on_ready is not None:
+            on_ready()
+        yield from items
+
+    return generate
 
 
 def test_fast_command_sized_burst_reaches_local_recognition(monkeypatch):
@@ -250,6 +268,45 @@ def test_click_sized_burst_remains_below_speech_gate(monkeypatch):
 
     assert actual == []
     assert logs == ["gate ignored short audio voiced=0.06s"]
+
+
+def test_missing_ffmpeg_fails_before_capture_is_spawned(monkeypatch):
+    monkeypatch.setattr(listen, "ffmpeg_bin", lambda: None)
+    monkeypatch.setattr(
+        listen.subprocess,
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("must not spawn without ffmpeg"),
+    )
+
+    with pytest.raises(listen.ListenerStartupError, match="brew install ffmpeg"):
+        next(listen.bursts())
+
+
+@pytest.mark.parametrize(("detail", "guidance"), [
+    (
+        "AVFoundation error: Operation not permitted",
+        "System Settings > Privacy & Security > Microphone",
+    ),
+    (
+        "Selected audio device (99) out of range",
+        "Microphone device '99' is unavailable",
+    ),
+])
+def test_capture_open_failure_has_actionable_local_guidance(
+        detail, guidance, monkeypatch):
+    class FailedCapture(FakeAudioProcess):
+        def poll(self):
+            return 1
+
+    def launch(*args, **kwargs):
+        kwargs["stderr"].write(detail.encode())
+        kwargs["stderr"].flush()
+        return FailedCapture([])
+
+    monkeypatch.setattr(listen.subprocess, "Popen", launch)
+
+    with pytest.raises(listen.ListenerStartupError, match=guidance):
+        next(listen.bursts(device="99"))
 
 
 def test_possible_wake_holds_speech_before_local_recognition(monkeypatch):
@@ -316,7 +373,7 @@ def test_non_wake_candidate_promptly_releases_provisional_turn(
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
     monkeypatch.setattr(
-        listen, "bursts", lambda device: iter([([b"ordinary speech"], False)]))
+        listen, "bursts", ready_bursts([([b"ordinary speech"], False)]))
     monkeypatch.setattr(
         listen, "transcribe_local", lambda frames: "ordinary room speech")
     monkeypatch.setattr(listen.player, "resume", lambda: actions.append("resume"))
@@ -363,7 +420,7 @@ def test_scratch_that_cancels_locally_without_transcribing_or_sending(
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"wake"], False),
         ([b"cancel"], False),
     ]))
@@ -433,7 +490,7 @@ def test_stop_talking_stays_local_and_confirms_with_one_cue(tmp_path, monkeypatc
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"voice control"], True),
     ]))
     monkeypatch.setattr(
@@ -461,7 +518,7 @@ def test_other_wake_input_keeps_normal_dictation_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"wake"], False),
         ([b"message"], False),
     ]))
@@ -488,7 +545,7 @@ def test_trailing_send_command_submits_and_releases_microphone_turn(
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"wake"], False),
         ([b"message"], False),
         ([b"send"], False),
@@ -519,7 +576,7 @@ def test_empty_local_transcription_is_identifiable_in_listener_log(
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
     monkeypatch.setattr(
-        listen, "bursts", lambda device: iter([([b"audio"] * 7, False)]))
+        listen, "bursts", ready_bursts([([b"audio"] * 7, False)]))
     monkeypatch.setattr(listen, "transcribe_local", lambda frames: "")
     monkeypatch.setattr(listen.config, "log", logs.append)
 
@@ -536,7 +593,7 @@ def test_send_it_inside_content_does_not_end_capture_or_get_removed(
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"wake"], False),
         ([b"internal phrase"], False),
         ([b"continued message"], False),
@@ -578,7 +635,7 @@ def test_personalized_audio_recovers_wake_and_send_asr_misses(
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"wake"], False),
         ([b"content"], False),
         ([b"send"], False),
@@ -675,7 +732,7 @@ def test_wake_rechecks_just_starting_playback_and_barges_in(
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"wake"], False),
         ([b"message"], True),
     ]))
@@ -705,7 +762,7 @@ def test_dictation_turn_pauses_before_wake_and_resumes_after_injection(
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"wake"], True),
         ([b"message"], False),
     ]))
@@ -738,7 +795,7 @@ def test_cancel_releases_exclusive_microphone_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"wake"], False),
         ([b"cancel"], False),
     ]))
@@ -761,7 +818,7 @@ def test_transcription_failure_releases_exclusive_microphone_turn(
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"wake"], False),
         ([b"send"], False),
     ]))
@@ -790,7 +847,7 @@ def test_repeated_wake_replays_tone_keeps_listening_and_is_not_sent(
     monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
+    monkeypatch.setattr(listen, "bursts", ready_bursts([
         ([b"wake"], False),
         ([b"repeat"], False),
         ([b"message"], False),
@@ -829,3 +886,162 @@ def test_strip_leading_removes_anything_said_before_the_wake_phrase():
     from parley.listen import WAKE, strip_leading
     heard = "the tests are green and I pushed it okay computer stop and check the log"
     assert strip_leading(heard, WAKE) == "stop and check the log"
+
+
+class FakeListenerProcess:
+    def __init__(self, pid=41001, returncode=None):
+        self.pid = pid
+        self.returncode = returncode
+        self.terminated = False
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        self.returncode = -15
+        return self.returncode
+
+
+def _stub_start_prerequisites(monkeypatch):
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/mock/whisper-cli")
+    monkeypatch.setattr(listen, "ffmpeg_bin", lambda: "/mock/ffmpeg")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen, "stop", lambda: False)
+    monkeypatch.setattr(listen.time, "sleep", lambda seconds: None)
+
+
+def test_start_succeeds_only_for_nonce_bound_live_capture(monkeypatch):
+    _stub_start_prerequisites(monkeypatch)
+    process = FakeListenerProcess()
+    commands = []
+
+    def launch(command, **kwargs):
+        commands.append(command)
+        token = command[command.index("--owner-token") + 1]
+        ready_fd = kwargs["pass_fds"][0]
+        os.write(ready_fd, (json.dumps({
+            "status": "ready",
+            "pid": process.pid,
+            "token": token,
+            "message": "",
+        }) + "\n").encode())
+        return process
+
+    monkeypatch.setattr(listen.subprocess, "Popen", launch)
+
+    assert listen.start("0", "%mock", "/mock/parley") == process.pid
+    assert commands[0][:3] == ["/mock/parley", "listen", "run"]
+    assert listen.get_target() == "%mock"
+
+
+def test_start_rejects_early_child_crash_without_false_success(monkeypatch):
+    _stub_start_prerequisites(monkeypatch)
+    process = FakeListenerProcess(returncode=23)
+    monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    with pytest.raises(
+            listen.ListenerStartupError,
+            match="exited before microphone capture was ready.*exit code 23",
+    ):
+        listen.start("0", "%mock", "/mock/parley", timeout=0.1)
+
+
+def test_start_rejects_wrong_nonce_and_pid_as_stale_readiness(monkeypatch):
+    _stub_start_prerequisites(monkeypatch)
+    process = FakeListenerProcess()
+
+    def launch(command, **kwargs):
+        ready_fd = kwargs["pass_fds"][0]
+        os.write(ready_fd, (json.dumps({
+            "status": "ready",
+            "pid": process.pid + 1,
+            "token": "stale-token",
+            "message": "",
+        }) + "\n").encode())
+        return process
+
+    monkeypatch.setattr(listen.subprocess, "Popen", launch)
+
+    with pytest.raises(
+            listen.ListenerStartupError, match="ownership could not be verified"):
+        listen.start("0", "%mock", "/mock/parley")
+    assert process.terminated
+
+
+def test_stale_reused_pid_without_owner_lock_is_not_running(
+        tmp_path, monkeypatch):
+    owner = {"pid": 41001, "token": "old-token"}
+    listen.config.private_write(listen.LISTEN_PID, json.dumps(owner))
+    monkeypatch.setattr(listen, "_pid_is_owned", lambda pid, token="": True)
+    monkeypatch.setattr(listen, "_lock_is_held", lambda: False)
+
+    assert listen.is_running() == 0
+    assert not listen.LISTEN_PID.exists()
+
+
+def test_slow_old_shutdown_times_out_before_replacement_launch(monkeypatch):
+    _stub_start_prerequisites(monkeypatch)
+    monkeypatch.setattr(
+        listen,
+        "stop",
+        lambda: (_ for _ in ()).throw(listen.ListenerStartupError(
+            "Listener PID 77 did not release the microphone within 4 seconds; "
+            "replacement was not started."
+        )),
+    )
+    monkeypatch.setattr(
+        listen.subprocess,
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("replacement must not launch"),
+    )
+
+    with pytest.raises(
+            listen.ListenerStartupError, match="replacement was not started"):
+        listen.start("0", "%mock", "/mock/parley")
+
+
+def test_unverified_lock_owner_is_never_signalled(monkeypatch):
+    listen.config.private_write(
+        listen.LISTEN_PID,
+        json.dumps({"pid": 41001, "token": "owner-token"}),
+    )
+    monkeypatch.setattr(listen, "_lock_is_held", lambda: True)
+    monkeypatch.setattr(listen, "_pid_is_owned", lambda pid, token="": False)
+    monkeypatch.setattr(
+        listen.os,
+        "kill",
+        lambda pid, signal: pytest.fail("unverified PID must not be signalled"),
+    )
+
+    with pytest.raises(
+            listen.ListenerStartupError, match="Refusing to signal"):
+        listen.stop()
+
+
+def test_listener_logs_metadata_not_recognized_or_dictated_content(
+        monkeypatch):
+    logs = []
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/mock/whisper-cli")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(
+        listen,
+        "bursts",
+        ready_bursts([([b"private words"], False)]),
+    )
+    monkeypatch.setattr(
+        listen,
+        "transcribe_local",
+        lambda frames: "my private recognized room speech",
+    )
+    monkeypatch.setattr(listen.config, "log", logs.append)
+
+    listen.run()
+
+    persisted = " ".join(logs)
+    assert "my private recognized room speech" not in persisted
+    assert "private words" not in persisted
+    assert "heard chars=" in persisted
