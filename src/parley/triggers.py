@@ -3,11 +3,15 @@
 Profiles contain normalized MFCC-like feature matrices, never raw recordings.
 Dynamic time warping makes comparisons tolerant of natural changes in pace.
 """
+import fcntl
 import json
 import math
 import os
+import shutil
 import subprocess
 import time
+import uuid
+from contextlib import contextmanager
 from functools import lru_cache
 
 import numpy as np
@@ -33,6 +37,10 @@ DEFAULT_THRESHOLDS = {
     "cancel": 0.29,
     "stop": 0.31,
 }
+PROFILE_MARKER = "current"
+PROFILE_LOCK = ".profile.lock"
+PROFILE_PREFIX = ".profile-"
+STAGING_PREFIX = ".staging-"
 
 
 def _frames(samples):
@@ -124,18 +132,114 @@ def distance(left, right):
     return float(previous[columns] / max(rows, columns))
 
 
-def _profile_path(name, index):
-    return config.TRIGGERS / f"{name}-{index}.npy"
+def _profile_path(directory, name, index):
+    return directory / f"{name}-{index}.npy"
 
 
-def save(samples):
-    """Persist local feature templates and calibrated positive thresholds."""
-    config.TRIGGERS.mkdir(parents=True, exist_ok=True)
-    os.chmod(config.TRIGGERS, 0o700)
-    for old_template in config.TRIGGERS.glob("*.npy"):
-        old_template.unlink()
-    metadata = {"version": 1, "thresholds": {}}
-    for name, recordings in samples.items():
+def _sync_directory(directory):
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(directory, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _private_write(path, content):
+    descriptor = os.open(
+        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def _private_save(path, vector):
+    descriptor = os.open(
+        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            np.save(handle, vector, allow_pickle=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
+@contextmanager
+def _profile_lock(exclusive):
+    config.private_directory(config.TRIGGERS)
+    lock_path = config.TRIGGERS / PROFILE_LOCK
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.chmod(lock_path, 0o600)
+    with os.fdopen(descriptor, "rb+") as handle:
+        operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        fcntl.flock(handle.fileno(), operation)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _active_profile_directory():
+    marker = config.TRIGGERS / PROFILE_MARKER
+    try:
+        generation = marker.read_text().strip()
+    except OSError:
+        return config.TRIGGERS
+    if (not generation.startswith(PROFILE_PREFIX)
+            or os.path.basename(generation) != generation):
+        return config.TRIGGERS
+    active = config.TRIGGERS / generation
+    return active if active.is_dir() else config.TRIGGERS
+
+
+def _read_profile(directory, complete=False):
+    metadata_path = directory / "profile.json"
+    try:
+        metadata = json.loads(metadata_path.read_text())
+        thresholds = metadata["thresholds"]
+        if not isinstance(metadata, dict) or not isinstance(thresholds, dict):
+            return {}, {}
+    except (KeyError, OSError, TypeError, ValueError):
+        return {}, {}
+
+    templates = {}
+    for name in PHRASES:
+        paths = sorted(directory.glob(f"{name}-*.npy"))
+        try:
+            templates[name] = [
+                np.load(path, allow_pickle=False) for path in paths
+            ]
+        except (OSError, ValueError):
+            return {}, {}
+
+    expected = metadata.get("template_counts")
+    if complete or expected is not None:
+        if (not isinstance(expected, dict)
+                or set(expected) != set(PHRASES)
+                or set(thresholds) != set(PHRASES)):
+            return {}, {}
+        if any(
+            not isinstance(expected[name], int)
+            or expected[name] < 3
+            or len(templates[name]) != expected[name]
+            for name in PHRASES
+        ):
+            return {}, {}
+    return templates, thresholds
+
+
+def _prepare_profile(samples):
+    metadata = {"version": 1, "thresholds": {}, "template_counts": {}}
+    templates = {}
+    for name in PHRASES:
+        recordings = samples.get(name, ())
         vectors = [features(recording) for recording in recordings]
         vectors = [vector for vector in vectors if len(vector)]
         if len(vectors) < 3:
@@ -151,33 +255,91 @@ def save(samples):
         default = DEFAULT_THRESHOLDS[name]
         metadata["thresholds"][name] = round(
             min(default + 0.08, max(default, observed * 1.22)), 4)
+        metadata["template_counts"][name] = len(vectors)
+        templates[name] = vectors
+    return templates, metadata
+
+
+def _write_staged_profile(directory, templates, metadata):
+    for name, vectors in templates.items():
         for index, vector in enumerate(vectors):
-            path = _profile_path(name, index)
-            np.save(path, vector, allow_pickle=False)
-            os.chmod(path, 0o600)
-    metadata_path = config.TRIGGERS / "profile.json"
-    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
-    os.chmod(metadata_path, 0o600)
-    load.cache_clear()
-    return metadata
+            _private_save(_profile_path(directory, name, index), vector)
+    _private_write(
+        directory / "profile.json",
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+    )
+    _sync_directory(directory)
+    loaded, thresholds = _read_profile(directory, complete=True)
+    if (any(len(loaded.get(name, ())) != len(templates[name]) for name in PHRASES)
+            or thresholds != metadata["thresholds"]):
+        raise OSError("staged trigger profile failed verification")
+
+
+def _cleanup_obsolete(active):
+    try:
+        paths = list(config.TRIGGERS.iterdir())
+    except OSError as exc:
+        config.log(f"trigger profile cleanup deferred: {exc}")
+        return
+    for path in paths:
+        if path in {
+            active,
+            config.TRIGGERS / PROFILE_MARKER,
+            config.TRIGGERS / PROFILE_LOCK,
+        }:
+            continue
+        try:
+            if path.is_dir() and path.name.startswith(
+                    (PROFILE_PREFIX, STAGING_PREFIX)):
+                shutil.rmtree(path)
+            elif (path.name == "profile.json"
+                  or path.suffix == ".npy"
+                  or path.name.startswith(".current-")):
+                path.unlink()
+        except OSError as exc:
+            config.log(f"trigger profile cleanup deferred: {exc}")
+
+
+def save(samples):
+    """Stage and atomically commit a complete private trigger profile."""
+    templates, metadata = _prepare_profile(samples)
+    token = uuid.uuid4().hex
+    staging = config.TRIGGERS / f"{STAGING_PREFIX}{token}"
+    generation = config.TRIGGERS / f"{PROFILE_PREFIX}{token}"
+    marker_temporary = config.TRIGGERS / f".current-{token}.tmp"
+    try:
+        with _profile_lock(exclusive=True):
+            staging.mkdir(mode=0o700)
+            os.chmod(staging, 0o700)
+            _write_staged_profile(staging, templates, metadata)
+            os.replace(staging, generation)
+            _sync_directory(config.TRIGGERS)
+            _private_write(marker_temporary, generation.name + "\n")
+            os.replace(marker_temporary, config.TRIGGERS / PROFILE_MARKER)
+            load.cache_clear()
+            try:
+                _sync_directory(config.TRIGGERS)
+            except OSError as exc:
+                config.log(f"trigger profile directory sync failed: {exc}")
+            _cleanup_obsolete(generation)
+        return metadata
+    finally:
+        load.cache_clear()
+        marker_temporary.unlink(missing_ok=True)
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 @lru_cache(maxsize=1)
 def load():
     """Load the profile, returning empty data when enrollment is absent."""
-    metadata_path = config.TRIGGERS / "profile.json"
-    try:
-        metadata = json.loads(metadata_path.read_text())
-    except (OSError, ValueError):
+    if not config.TRIGGERS.exists():
         return {}, {}
-    templates = {}
-    for name in PHRASES:
-        paths = sorted(config.TRIGGERS.glob(f"{name}-*.npy"))
-        try:
-            templates[name] = [np.load(path, allow_pickle=False) for path in paths]
-        except (OSError, ValueError):
-            templates[name] = []
-    return templates, metadata.get("thresholds", {})
+    try:
+        with _profile_lock(exclusive=False):
+            return _read_profile(_active_profile_directory())
+    except OSError:
+        return {}, {}
 
 
 def enrolled():
