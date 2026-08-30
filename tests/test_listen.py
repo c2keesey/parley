@@ -270,6 +270,32 @@ def test_click_sized_burst_remains_below_speech_gate(monkeypatch):
     assert logs == ["gate ignored short audio voiced=0.06s"]
 
 
+def test_capture_child_is_reaped_before_microphone_stream_returns(monkeypatch):
+    actions = []
+
+    class ReapedCapture(FakeAudioProcess):
+        def __init__(self):
+            super().__init__([b"\x00\x00" * listen.FRAME])
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            actions.append("terminate")
+
+        def wait(self, timeout=None):
+            actions.append("wait")
+            self.returncode = -15
+            return self.returncode
+
+    process = ReapedCapture()
+    monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    assert list(listen.bursts()) == []
+    assert actions == ["terminate", "wait"]
+
+
 def test_missing_ffmpeg_fails_before_capture_is_spawned(monkeypatch):
     monkeypatch.setattr(listen, "ffmpeg_bin", lambda: None)
     monkeypatch.setattr(

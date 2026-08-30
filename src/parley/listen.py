@@ -27,6 +27,7 @@ import os
 import secrets
 import select
 import shutil
+import signal
 import struct
 import subprocess
 import tempfile
@@ -74,13 +75,17 @@ MESSAGE_MODEL_URL = (
 TARGET = config.STATE / "target"
 LISTEN_PID = config.STATE / "listener.pid"
 LISTEN_LOCK = config.STATE / "listener.lock"
-STARTUP_TIMEOUT = float(os.environ.get("PARLEY_LISTEN_STARTUP_TIMEOUT", "8"))
-SHUTDOWN_TIMEOUT = float(os.environ.get("PARLEY_LISTEN_SHUTDOWN_TIMEOUT", "4"))
+STARTUP_TIMEOUT = 8.0
+SHUTDOWN_TIMEOUT = 4.0
 STARTUP_STABILITY = 0.1
 
 
 class ListenerStartupError(RuntimeError):
     """A local listener lifecycle failure that the user can act on."""
+
+
+class ListenerStopped(Exception):
+    """Internal control flow for a graceful SIGTERM shutdown."""
 
 
 def whisper_bin():
@@ -471,6 +476,22 @@ def _microphone_error(detail, device):
     )
 
 
+def _release_capture(process):
+    """Reap the exact ffmpeg child before microphone ownership is released."""
+    poll = getattr(process, "poll", lambda: None)
+    if poll() is not None:
+        return
+    process.terminate()
+    wait = getattr(process, "wait", None)
+    if wait is None:
+        return
+    try:
+        wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        wait(timeout=1)
+
+
 def bursts(device="0", reserve_output=True, on_ready=None):
     """Yield (frames, was_playing) per speech burst, plus idle heartbeats.
 
@@ -562,9 +583,7 @@ def bursts(device="0", reserve_output=True, on_ready=None):
     finally:
         if provisional_turn:
             player.resume()
-        poll = getattr(process, "poll", lambda: None)
-        if poll() is None:
-            process.terminate()
+        _release_capture(process)
         errors.close()
 
 
@@ -679,6 +698,7 @@ def run(device="0", owner_token="", ready_fd=None):
     owner = {"pid": os.getpid(), "token": owner_token, "legacy": not owner_token}
     startup_fd = ready_fd
     startup_sent = False
+    previous_sigterm = None
 
     def announce(status, message=""):
         nonlocal startup_fd, startup_sent
@@ -686,7 +706,18 @@ def run(device="0", owner_token="", ready_fd=None):
         startup_fd = None
         startup_sent = True
 
+    def stop_listener(signum, frame):
+        raise ListenerStopped
+
     try:
+        try:
+            previous_sigterm = signal.signal(
+                signal.SIGTERM,
+                stop_listener,
+            )
+        except ValueError:
+            # Tests or embedders may invoke run() outside the main thread.
+            previous_sigterm = None
         lock = _claim_listener_lock()
         _write_owner(owner_token)
         if not whisper_bin():
@@ -857,6 +888,9 @@ def run(device="0", owner_token="", ready_fd=None):
             capturing = False
             frames, captured = captured, []
             finish(frames)
+    except ListenerStopped:
+        if not startup_sent:
+            announce("error", "Listener was stopped before capture became ready.")
     except ListenerStartupError as exc:
         if not startup_sent:
             announce("error", str(exc))
@@ -884,6 +918,8 @@ def run(device="0", owner_token="", ready_fd=None):
                 lock.close()
             except OSError:
                 pass
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 def is_running():
