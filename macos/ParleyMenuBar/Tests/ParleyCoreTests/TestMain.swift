@@ -21,7 +21,8 @@ struct ParleyCoreTestRunner {
     do {
       try runStatusTests()
       try runCommandTests()
-      print("ParleyCoreTests: all status and command tests passed")
+      try runLaunchAtLoginTests()
+      print("ParleyCoreTests: all status, command, and login-item tests passed")
     } catch {
       let message = "ParleyCoreTests: FAILED: \(error)\n"
       FileHandle.standardError.write(Data(message.utf8))

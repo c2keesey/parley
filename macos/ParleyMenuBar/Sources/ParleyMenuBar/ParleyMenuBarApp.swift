@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct ParleyMenuBarApp: App {
   @StateObject private var model = ParleyModel()
+  @StateObject private var launchAtLogin = LaunchAtLoginController()
 
   init() {
     NSApplication.shared.setActivationPolicy(.accessory)
@@ -11,7 +12,7 @@ struct ParleyMenuBarApp: App {
 
   var body: some Scene {
     MenuBarExtra {
-      MenuContentView(model: model)
+      MenuContentView(model: model, launchAtLogin: launchAtLogin)
     } label: {
       Label(
         model.presentation.state.label,
@@ -23,10 +24,10 @@ struct ParleyMenuBarApp: App {
     .menuBarExtraStyle(.menu)
 
     Window("Parley Status", id: "status") {
-      StatusWindowView(model: model)
+      StatusWindowView(model: model, launchAtLogin: launchAtLogin)
         .onAppear { model.start() }
     }
-    .defaultSize(width: 470, height: 440)
+    .defaultSize(width: 470, height: 520)
     .windowResizability(.contentSize)
   }
 }

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct StatusWindowView: View {
   @ObservedObject var model: ParleyModel
+  @ObservedObject var launchAtLogin: LaunchAtLoginController
 
   private var stateColor: Color {
     switch model.presentation.state {
@@ -47,6 +48,7 @@ struct StatusWindowView: View {
           "Hands-free listener",
           value: model.snapshot?.listenerRunning == true ? "On" : "Off"
         )
+        statusRow("Launch at login", value: launchAtLogin.state.status.label)
         statusRow("CLI", value: model.cli.displayName)
         statusRow(
           "Last checked",
@@ -58,6 +60,9 @@ struct StatusWindowView: View {
 
       Divider()
       ControlButtons(model: model)
+
+      Divider()
+      LaunchAtLoginControl(controller: launchAtLogin, showsDetail: true)
 
       HStack {
         if model.isWorking {
@@ -75,6 +80,7 @@ struct StatusWindowView: View {
     }
     .padding(26)
     .frame(width: 470)
+    .onAppear { launchAtLogin.refresh() }
     .background(
       LinearGradient(
         colors: [Color.accentColor.opacity(0.06), .clear],

@@ -7,7 +7,8 @@ A native SwiftUI control surface over the existing Parley CLI.
 - `ParleyCore` decodes the versioned local JSON snapshot, derives one of seven
   visual states, and maps enabled controls to existing CLI arguments.
 - `ParleyMenuBar` owns the `MenuBarExtra`, status window, one-second polling,
-  keyboard shortcuts, and VoiceOver descriptions.
+  keyboard shortcuts, VoiceOver descriptions, and the native login-item
+  lifecycle.
 - `ParleyCLIClient` launches only the `parley` executable. Status has a
   three-second timeout, control commands have bounded timeouts, and stdout is
   decoded as data rather than evaluated as shell input.
@@ -39,3 +40,24 @@ CLI before launch:
 PARLEY_CLI="$PWD/.venv/bin/parley" \
   macos/ParleyMenuBar/.build/ParleyMenuBar.app/Contents/MacOS/ParleyMenuBar
 ```
+
+## Launch at Login
+
+Launch at Login is off until the user enables it. The toggle calls
+`SMAppService.mainApp.register()` and `unregister()`; it never writes shell
+configuration, cron entries, or LaunchAgent plists. The UI distinguishes the
+system's not-registered, enabled, approval-required, and not-found states and
+shows native registration errors without pretending the preference changed.
+
+The ad-hoc development bundle is useful for exercising the UI and signature,
+but macOS may decide that a development bundle's location or signature is not
+eligible for registration. Parley reports that failure or unavailable state in
+the menu and status window. Install and sign the app normally for distribution;
+do not bypass ServiceManagement during development.
+
+The lifecycle controls are deliberately independent: **Disable Voice** disables
+spoken replies for the selected terminal target, stops current speech, and
+clears queued speech; **Stop Listener** stops hands-free microphone routing;
+**Stop Speech Now** clears current and queued playback without disabling future
+voice; and **Quit Menu Bar App** closes only the native interface. Launch at
+Login retains its current setting when the interface quits.

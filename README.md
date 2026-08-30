@@ -123,6 +123,13 @@ is not the currently installed `parley`. The menu clearly degrades when the CLI
 is absent, incompatible, or points at an unavailable tmux target; controls that
 cannot preserve a live target context remain disabled.
 
+**Launch at Login** is opt-in and controls only the native menu-bar app. It
+uses macOS ServiceManagement rather than shell startup files or a hand-written
+LaunchAgent. The menu reports whether the app is off, enabled, awaiting approval
+in Login Items, or unavailable, and turning the option off unregisters it.
+Stopping the listener, disabling voice for a target, and quitting the menu-bar
+interface remain separate actions.
+
 ## Hands-free input
 
 Voice output alone still leaves you typing. `parley listen` closes the

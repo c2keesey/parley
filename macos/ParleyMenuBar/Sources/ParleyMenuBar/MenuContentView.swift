@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MenuContentView: View {
   @ObservedObject var model: ParleyModel
+  @ObservedObject var launchAtLogin: LaunchAtLoginController
   @Environment(\.openWindow) private var openWindow
 
   var body: some View {
@@ -15,6 +16,9 @@ struct MenuContentView: View {
 
     Divider()
     ControlButtons(model: model)
+    Divider()
+    LaunchAtLoginControl(controller: launchAtLogin)
+      .onAppear { launchAtLogin.refresh() }
     Divider()
 
     Button {
@@ -36,10 +40,14 @@ struct MenuContentView: View {
     .accessibilityHint("Refreshes local Parley status.")
 
     Divider()
-    Button("Quit Parley") {
+    Button {
       NSApplication.shared.terminate(nil)
+    } label: {
+      Label("Quit Menu Bar App", systemImage: "xmark.circle")
     }
     .keyboardShortcut("q", modifiers: .command)
-    .accessibilityHint("Quits only the menu-bar app, not the Parley listener.")
+    .accessibilityHint(
+      "Closes only this menu-bar interface. Voice, the listener, and Launch at Login keep their current settings."
+    )
   }
 }

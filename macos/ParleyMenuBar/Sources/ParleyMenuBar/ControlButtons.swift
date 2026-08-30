@@ -12,66 +12,56 @@ struct ControlButtons: View {
     Group {
       if model.snapshot?.voiceOn == true {
         controlButton(
-          "Turn Voice Off for \(targetName)",
-          systemImage: "speaker.slash",
           control: .voiceOff,
-          shortcut: "1",
-          hint: "Stops future spoken agent replies for this target."
+          systemImage: "speaker.slash",
+          shortcut: "1"
         )
       } else {
         controlButton(
-          "Turn Voice On for \(targetName)",
-          systemImage: "speaker.wave.2",
           control: .voiceOn,
-          shortcut: "1",
-          hint: "Speaks future agent replies for this target."
+          systemImage: "speaker.wave.2",
+          shortcut: "1"
         )
       }
 
       if model.snapshot?.listenerRunning == true {
         controlButton(
-          "Turn Listener Off",
-          systemImage: "mic.slash",
           control: .listenerOff,
-          shortcut: "2",
-          hint: "Stops hands-free listening without changing voice output."
+          systemImage: "mic.slash",
+          shortcut: "2"
         )
       } else {
         controlButton(
-          "Turn Listener On for \(targetName)",
-          systemImage: "mic",
           control: .listenerOn,
-          shortcut: "2",
-          hint: "Starts hands-free listening for this target."
+          systemImage: "mic",
+          shortcut: "2"
         )
       }
 
       controlButton(
-        "Stop Speech",
-        systemImage: "stop.circle",
         control: .stopSpeech,
-        shortcut: ".",
-        hint: "Stops current speech and clears queued speech."
+        systemImage: "stop.circle",
+        shortcut: "."
       )
     }
   }
 
   private func controlButton(
-    _ title: String,
-    systemImage: String,
     control: ParleyControl,
+    systemImage: String,
     shortcut: KeyEquivalent,
-    hint: String
+    modifiers: EventModifiers = .command
   ) -> some View {
-    Button {
+    let presentation = control.presentation(targetName: targetName)
+    return Button {
       model.perform(control)
     } label: {
-      Label(title, systemImage: systemImage)
+      Label(presentation.title, systemImage: systemImage)
     }
     .disabled(model.command(for: control) == nil || model.isWorking)
-    .keyboardShortcut(shortcut, modifiers: .command)
-    .accessibilityLabel(title)
-    .accessibilityHint(hint)
-    .help(hint)
+    .keyboardShortcut(shortcut, modifiers: modifiers)
+    .accessibilityLabel(presentation.title)
+    .accessibilityHint(presentation.hint)
+    .help(presentation.hint)
   }
 }

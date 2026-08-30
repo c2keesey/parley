@@ -3,6 +3,35 @@ import ParleyCore
 func runCommandTests() throws {
   try testMapsSafeControlsToExistingCLICommands()
   try testDisablesControlsThatAreUnsafeOrAlreadySatisfied()
+  try testLifecycleActionsHaveUnambiguousWording()
+}
+
+private func testLifecycleActionsHaveUnambiguousWording() throws {
+  let target = "ivory lynx"
+  let voiceOn = ParleyControl.voiceOn.presentation(targetName: target)
+  let voiceOff = ParleyControl.voiceOff.presentation(targetName: target)
+  let listenerOff = ParleyControl.listenerOff.presentation(targetName: target)
+  let stopSpeech = ParleyControl.stopSpeech.presentation(targetName: target)
+
+  try expect(
+    voiceOn.title == "Enable Voice for ivory lynx",
+    "voice-on wording should be an imperative action"
+  )
+  try expect(
+    voiceOff.title == "Disable Voice for ivory lynx",
+    "voice-off wording should be an imperative action"
+  )
+  try expect(
+    voiceOff.hint
+      == "Disables future spoken replies for this target, stops current speech, and clears queued speech. The listener keeps running.",
+    "voice-off hint should explain current, queued, future, and listener behavior"
+  )
+  try expect(listenerOff.title == "Stop Listener", "listener action should be distinct")
+  try expect(stopSpeech.title == "Stop Speech Now", "speech action should be distinct")
+  try expect(
+    Set([voiceOn.title, voiceOff.title, listenerOff.title, stopSpeech.title]).count == 4,
+    "lifecycle actions should not share labels"
+  )
 }
 
 private func testMapsSafeControlsToExistingCLICommands() throws {

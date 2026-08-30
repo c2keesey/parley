@@ -6,6 +6,48 @@ public enum ParleyControl: String, CaseIterable, Equatable, Sendable {
   case listenerOn
   case listenerOff
   case stopSpeech
+
+  public func presentation(targetName: String) -> ParleyControlPresentation {
+    switch self {
+    case .voiceOn:
+      ParleyControlPresentation(
+        title: "Enable Voice for \(targetName)",
+        hint: "Speaks future agent replies for this target."
+      )
+    case .voiceOff:
+      ParleyControlPresentation(
+        title: "Disable Voice for \(targetName)",
+        hint:
+          "Disables future spoken replies for this target, stops current speech, and clears queued speech. The listener keeps running."
+      )
+    case .listenerOn:
+      ParleyControlPresentation(
+        title: "Start Listener for \(targetName)",
+        hint: "Starts hands-free listening for this target."
+      )
+    case .listenerOff:
+      ParleyControlPresentation(
+        title: "Stop Listener",
+        hint: "Stops hands-free listening without changing voice output."
+      )
+    case .stopSpeech:
+      ParleyControlPresentation(
+        title: "Stop Speech Now",
+        hint:
+          "Stops current speech and clears queued speech without disabling future spoken replies."
+      )
+    }
+  }
+}
+
+public struct ParleyControlPresentation: Equatable, Sendable {
+  public let title: String
+  public let hint: String
+
+  public init(title: String, hint: String) {
+    self.title = title
+    self.hint = hint
+  }
 }
 
 public struct ParleyCommand: Equatable, Sendable {
