@@ -24,15 +24,15 @@ def _report(keys):
 def _status_snapshot():
     """Credential-free process boundary for local status surfaces.
 
-    A menu-bar process normally has no tmux environment, so the listener's
-    last target is its context. A caller launched from a pane can override
-    that context naturally through TMUX_PANE. No provider discovery belongs
-    here: provider discovery can consult environment files or Keychain.
+    The listener's persisted target is authoritative because that is where
+    dictation will actually be sent. The caller's pane is a fallback only when
+    no listener target exists. No provider discovery belongs here: provider
+    discovery can consult environment files or Keychain.
     """
     from parley import indicator
     from parley import listen as listener
 
-    pane = os.environ.get("TMUX_PANE", "") or listener.get_target()
+    pane = listener.get_target() or os.environ.get("TMUX_PANE", "")
     label = indicator.session_label(pane) if pane else ""
     listener_running = bool(listener.is_running())
     return {

@@ -36,12 +36,12 @@ def test_json_status_is_stable_and_does_not_discover_credentials(
     }
 
 
-def test_json_status_prefers_calling_pane_as_control_context(monkeypatch, capsys):
+def test_json_status_prefers_listener_routing_target(monkeypatch, capsys):
     monkeypatch.setenv("TMUX_PANE", "%392")
     monkeypatch.setattr(listen, "get_target", lambda: "%531")
     monkeypatch.setattr(listen, "is_running", lambda: 0)
     monkeypatch.setattr(listen, "speaking", lambda: False)
-    monkeypatch.setattr(indicator, "session_label", lambda pane: "current pane")
+    monkeypatch.setattr(indicator, "session_label", lambda pane: "listener target")
     monkeypatch.setattr(hooks, "pane_is_on", lambda pane: False)
 
     cli.main(["status", "--json"])
@@ -49,10 +49,29 @@ def test_json_status_prefers_calling_pane_as_control_context(monkeypatch, capsys
     status = json.loads(capsys.readouterr().out)
     assert status["target"] == {
         "available": True,
+        "label": "listener target",
+        "pane": "%531",
+    }
+    assert status["listener_state"] == "off"
+
+
+def test_json_status_falls_back_to_calling_pane_without_listener_target(
+    monkeypatch, capsys
+):
+    monkeypatch.setenv("TMUX_PANE", "%392")
+    monkeypatch.setattr(listen, "get_target", lambda: "")
+    monkeypatch.setattr(listen, "is_running", lambda: 0)
+    monkeypatch.setattr(listen, "speaking", lambda: False)
+    monkeypatch.setattr(indicator, "session_label", lambda pane: "current pane")
+    monkeypatch.setattr(hooks, "pane_is_on", lambda pane: False)
+
+    cli.main(["status", "--json"])
+
+    assert json.loads(capsys.readouterr().out)["target"] == {
+        "available": True,
         "label": "current pane",
         "pane": "%392",
     }
-    assert status["listener_state"] == "off"
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
