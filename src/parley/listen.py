@@ -372,8 +372,7 @@ def cue(kind):
 
 
 def set_target(pane):
-    config.STATE.mkdir(parents=True, exist_ok=True)
-    TARGET.write_text(pane or "")
+    config.private_write(TARGET, pane or "")
 
 
 def get_target():
@@ -418,8 +417,7 @@ def listener_state():
 
 def set_listener_state(state):
     """Persist and immediately display a listener state transition."""
-    config.STATE.mkdir(parents=True, exist_ok=True)
-    config.LISTENER_STATE.write_text(state)
+    config.private_write(config.LISTENER_STATE, state)
     indicator.refresh()
 
 
@@ -510,10 +508,9 @@ def run(device="0"):
     if not ensure_model():
         raise SystemExit("could not download the wake-word model")
 
-    config.STATE.mkdir(parents=True, exist_ok=True)
-    LISTEN_PID.write_text(str(os.getpid()))
+    config.private_write(LISTEN_PID, str(os.getpid()))
     set_listener_state("ready")
-    config.log(f"listening wake={WAKE!r} send={SEND!r} device={device}")
+    config.log(f"listener started device={device}")
     personalized_active = triggers.enrolled()
     if personalized_active:
         config.log("personalized triggers active")
@@ -532,7 +529,7 @@ def run(device="0"):
                 config.log(f"transcription failed: {exc}")
                 return
             message = strip_phrase(strip_wake_phrases(spoken), SEND)
-            config.log(f"message {message[:80]!r}")
+            config.log(f"message transcribed chars={len(message)}")
             if message:
                 inject(message)
         finally:
@@ -607,8 +604,10 @@ def run(device="0"):
                     player.resume()
                 continue
             if heard:
-                config.log(f"heard {heard[:80]!r} capturing={capturing} "
-                           f"overlapped={overlapped}")
+                config.log(
+                    f"local transcription chars={len(heard)} "
+                    f"capturing={capturing} overlapped={overlapped}"
+                )
 
             # This is a voice-control command, not dictation. It is handled
             # before capture state, never reaches cloud transcription, emits

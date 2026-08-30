@@ -119,9 +119,9 @@ def is_on(keys):
 
 
 def turn_on(keys):
-    config.SESSIONS.mkdir(parents=True, exist_ok=True)
+    config.private_directory(config.SESSIONS)
     for key in keys:
-        (config.SESSIONS / key).touch()
+        config.private_write(config.SESSIONS / key, "")
     cutoff = time.time() - 7 * 86400
     for marker in config.SESSIONS.iterdir():
         try:
@@ -180,8 +180,7 @@ def speak_reply(marker_key, payload):
             break
         reply_id, text = newer_id, newer_text
 
-    seen.parent.mkdir(parents=True, exist_ok=True)
-    seen.write_text(reply_id)
+    config.private_write(seen, reply_id)
     enqueue(label_reply(text, payload))
     drain()
 

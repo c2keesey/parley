@@ -75,6 +75,7 @@ def enqueue(text, voice=None, model=None):
 
 def _wake_output():
     """Bluetooth outputs swallow the first moment while they switch profiles."""
+    config.private_directory(config.STATE)
     if not config.SILENCE.exists():
         ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
         if not os.path.exists(ffmpeg):
@@ -85,6 +86,7 @@ def _wake_output():
             capture_output=True,
         )
     if config.SILENCE.exists():
+        os.chmod(config.SILENCE, 0o600)
         subprocess.run(["afplay", str(config.SILENCE)], capture_output=True)
 
 
@@ -117,7 +119,7 @@ def _remaining_audio(path, offset):
 
 
 def play(audio, interrupt=None, skip=None):
-    config.STATE.mkdir(parents=True, exist_ok=True)
+    config.private_directory(config.STATE)
     proc = None
     resumed_paths = []
     offset = 0.0
@@ -140,9 +142,9 @@ def play(audio, interrupt=None, skip=None):
             pause_token = _pause_token()
             started = time.monotonic()
             proc = subprocess.Popen(["afplay", playback_path])
-            with open(config.PIDFILE, "a") as fh:
+            with config.private_open(config.PIDFILE, "a") as fh:
                 fh.write(f"{proc.pid}\n")
-            config.SPEECH_PID.write_text(str(proc.pid))
+            config.private_write(config.SPEECH_PID, str(proc.pid))
             # A turn can open between the gate check and publishing the pid.
             # pause() changes its token before terminating playback, so the
             # exit is distinguishable from both natural completion and stop().
@@ -194,7 +196,7 @@ def play(audio, interrupt=None, skip=None):
 
 
 def _pending():
-    config.QUEUE.mkdir(parents=True, exist_ok=True)
+    config.private_directory(config.QUEUE)
     return sorted(p for p in config.QUEUE.iterdir() if p.suffix == ".json")
 
 
@@ -258,8 +260,7 @@ def _signal_speech(sig):
 
 def pause():
     """Give the microphone the floor while preserving current and queued speech."""
-    config.STATE.mkdir(parents=True, exist_ok=True)
-    config.MIC_TURN.write_text(str(os.getpid()))
+    config.private_write(config.MIC_TURN, str(os.getpid()))
     config.private_write(config.PAUSE, str(time.time_ns()))
     paused = _signal_speech(signal.SIGTERM)
     config.log(
@@ -286,8 +287,7 @@ def active():
 
 def drain():
     """Play everything queued, in order. Returns immediately if already draining."""
-    config.STATE.mkdir(parents=True, exist_ok=True)
-    lock = open(config.LOCK, "w")
+    lock = config.private_open(config.LOCK)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -296,7 +296,7 @@ def drain():
     woke = False
     spoke = False
     interrupt = _interrupt_token()
-    config.DRAIN_PID.write_text(str(os.getpid()))
+    config.private_write(config.DRAIN_PID, str(os.getpid()))
     try:
         while True:
             items = _pending()
@@ -377,8 +377,7 @@ def drain():
 
 def stop():
     """Permanently discard current and queued speech."""
-    config.STATE.mkdir(parents=True, exist_ok=True)
-    config.INTERRUPT.write_text(str(time.time_ns()))
+    config.private_write(config.INTERRUPT, str(time.time_ns()))
     config.MIC_TURN.unlink(missing_ok=True)
     for item in _pending():
         item.unlink(missing_ok=True)
@@ -392,7 +391,7 @@ def stop():
         except (OSError, ValueError):
             pass
     try:
-        config.PIDFILE.write_text("")
+        config.private_write(config.PIDFILE, "")
     except OSError:
         pass
     config.SPEECH_PID.unlink(missing_ok=True)
@@ -400,7 +399,6 @@ def stop():
 
 def skip():
     """End only the current speech block and leave queued speech intact."""
-    config.STATE.mkdir(parents=True, exist_ok=True)
     config.private_write(config.SKIP, str(time.time_ns()))
     # A stop-talking utterance ends its provisional microphone reservation too.
     config.MIC_TURN.unlink(missing_ok=True)
