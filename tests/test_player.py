@@ -6,11 +6,12 @@ import time
 
 import pytest
 
-from parley import config, indicator, player, processes
+from parley import config, indicator, player, processes, tts
 
 
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROVIDER", "macos")
     monkeypatch.setattr(config, "STATE", tmp_path)
     monkeypatch.setattr(config, "QUEUE", tmp_path / "queue")
     monkeypatch.setattr(config, "LOCK", tmp_path / "player.lock")
@@ -125,6 +126,131 @@ def test_complete_multichunk_reply_plays_in_order_with_one_done_cue(
 
     assert recorder == ["One short.", "Two short.", "Three short."]
     assert chimed == ["done"]
+
+
+def test_provider_failure_is_sanitized_dropped_and_returns_failure(monkeypatch):
+    from parley import cues
+
+    private_text = "synthetic private response sentinel"
+    private_detail = "synthetic provider body sentinel"
+    chimed = []
+    monkeypatch.setattr(
+        player, "synthesize",
+        lambda *args: (_ for _ in ()).throw(RuntimeError(private_detail)),
+    )
+    monkeypatch.setattr(
+        cues, "play", lambda name, wait=True: chimed.append((name, wait)))
+    player.enqueue(private_text)
+
+    assert player.drain() is False
+
+    assert player._pending() == []
+    assert player.speech_error() == {
+        "policy": "drop-after-one-attempt",
+        "provider": config.provider(),
+        "retry": "manual",
+        "stage": "synthesis",
+    }
+    assert chimed == [("error", False)]
+    exposed = (
+        (config.STATE / "runtime-status.json").read_text()
+        + config.LOG.read_text()
+    )
+    assert private_text not in exposed
+    assert private_detail not in exposed
+
+
+def test_entirely_failed_drain_attempts_each_block_once_and_indicates_once(
+        monkeypatch):
+    from parley import cues
+
+    attempts = []
+    chimed = []
+
+    def fail(text, voice, model, provider):
+        attempts.append(text)
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setattr(player, "synthesize", fail)
+    monkeypatch.setattr(
+        cues, "play", lambda name, wait=True: chimed.append((name, wait)))
+    player.enqueue("first block")
+    player.enqueue("second block")
+
+    assert player.drain() is False
+    assert attempts == ["first block", "second block"]
+    assert chimed == [("error", False)]
+    assert player._pending() == []
+
+
+def test_nonzero_afplay_is_failure_and_never_emits_done(monkeypatch):
+    from parley import cues
+
+    class FailedAfplay:
+        pid = 4242
+
+        def wait(self):
+            return 7
+
+    chimed = []
+    monkeypatch.setattr(player, "synthesize", lambda *args: b"audio")
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(player.subprocess, "Popen", lambda argv: FailedAfplay())
+    monkeypatch.setattr(
+        cues, "play", lambda name, wait=True: chimed.append((name, wait)))
+    player.enqueue("synthetic playback block")
+
+    assert player.drain() is False
+
+    assert player.speech_error()["stage"] == "playback"
+    assert chimed == [("error", False)]
+
+
+def test_invalid_macos_voice_is_a_sanitized_synthesis_failure(monkeypatch):
+    private_detail = "synthetic say diagnostic sentinel"
+    monkeypatch.setattr(config, "provider", lambda: "macos")
+    monkeypatch.setattr(config, "active_voice", lambda: "Missing Test Voice")
+    monkeypatch.setattr(config, "active_model", lambda: "say")
+    monkeypatch.setattr(player, "synthesize", tts.synthesize)
+    monkeypatch.setattr(
+        tts.subprocess,
+        "run",
+        lambda *args, **kwargs: type(
+            "Result", (), {"returncode": 1, "stderr": private_detail})(),
+    )
+    monkeypatch.setattr("parley.cues.play", lambda *args, **kwargs: None)
+    player.enqueue("synthetic invalid voice block")
+
+    assert player.drain() is False
+
+    error = player.speech_error()
+    assert error["provider"] == "macos"
+    assert error["stage"] == "synthesis"
+    assert "selected macOS voice" in player.speech_error_message(error)
+    assert private_detail not in config.LOG.read_text()
+
+
+def test_clean_later_drain_clears_failure_and_reports_recovery(
+        recorder, monkeypatch):
+    from parley import cues
+
+    chimed = []
+    monkeypatch.setattr(cues, "play", lambda name, wait=True: chimed.append(name))
+    monkeypatch.setattr(
+        player, "synthesize",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    player.enqueue("failed block")
+    assert player.drain() is False
+    assert player.speech_error() is not None
+
+    monkeypatch.setattr(player, "synthesize", lambda text, *args: text.encode())
+    player.enqueue("recovered block")
+
+    assert player.drain() is True
+    assert recorder == ["recovered block"]
+    assert chimed == ["error", "done"]
+    assert player.speech_error() is None
 
 
 def test_local_aiff_audio_is_written_with_the_right_extension(monkeypatch):

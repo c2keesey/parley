@@ -20,6 +20,7 @@ class Response:
 @pytest.fixture(autouse=True)
 def provider_defaults(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE", tmp_path)
+    monkeypatch.setattr(config, "LOG", tmp_path / "speak.log")
     monkeypatch.setattr(config, "PROVIDER", "openai")
     monkeypatch.setattr(config, "VOICE", "fable")
     monkeypatch.setattr(config, "MODEL", "openai-model")
@@ -87,6 +88,54 @@ def test_auto_temporarily_uses_openai_after_elevenlabs_failure(monkeypatch):
     assert status["provider"]["active"] == "openai"
     assert status["provider"]["fallback_from"] == "elevenlabs"
     assert status["errors"][-1]["code"] == "provider_fallback"
+
+
+def test_elevenlabs_transport_error_falls_back_to_openai(monkeypatch):
+    monkeypatch.setattr(config, "PROVIDER", "auto")
+    monkeypatch.setattr(config, "elevenlabs_api_key", lambda: "el-key")
+    monkeypatch.setattr(config, "api_key", lambda: "openai-key")
+    requested = []
+
+    def open_request(request, timeout):
+        requested.append(request.full_url)
+        if request.full_url.startswith(tts.ELEVENLABS_ENDPOINT):
+            raise urllib.error.URLError("synthetic offline detail")
+        return Response(b"openai fallback audio")
+
+    monkeypatch.setattr(tts.urllib.request, "urlopen", open_request)
+
+    assert tts.synthesize(
+        "hello", "eleven-voice", "eleven-model", "elevenlabs"
+    ) == b"openai fallback audio"
+    assert requested == [
+        f"{tts.ELEVENLABS_ENDPOINT}/eleven-voice?output_format=mp3_44100_128",
+        tts.OPENAI_ENDPOINT,
+    ]
+    assert config.tts_fallback_active("elevenlabs")
+    assert "synthetic offline detail" not in config.LOG.read_text()
+
+
+def test_openai_transport_error_falls_back_to_macos(monkeypatch):
+    monkeypatch.setattr(config, "PROVIDER", "auto")
+    monkeypatch.setattr(config, "api_key", lambda: "openai-key")
+    monkeypatch.setattr(
+        tts.urllib.request,
+        "urlopen",
+        lambda request, timeout: (_ for _ in ()).throw(
+            urllib.error.URLError("synthetic DNS detail")),
+    )
+
+    def local_say(argv, **kwargs):
+        Path(argv[argv.index("-o") + 1]).write_bytes(b"local fallback audio")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(tts.subprocess, "run", local_say)
+
+    assert tts.synthesize(
+        "hello", "fable", "openai-model", "openai"
+    ) == b"local fallback audio"
+    assert config.tts_fallback_active("openai")
+    assert "synthetic DNS detail" not in config.LOG.read_text()
 
 
 def test_macos_synthesis_is_local_and_keeps_text_out_of_argv(monkeypatch):
@@ -195,8 +244,10 @@ def test_elevenlabs_error_is_actionable(monkeypatch):
         "url", 401, "Unauthorized", {}, io.BytesIO(b"bad key"))
     monkeypatch.setattr(tts.urllib.request, "urlopen",
                         lambda request, timeout: (_ for _ in ()).throw(error))
-    with pytest.raises(RuntimeError, match="elevenlabs -> 401: bad key"):
+    with pytest.raises(
+            RuntimeError, match="ElevenLabs synthesis failed \\(HTTP 401\\)"):
         tts.synthesize("hello")
+    assert "bad key" not in config.LOG.read_text()
 
 
 def test_elevenlabs_voices_are_listed(monkeypatch):

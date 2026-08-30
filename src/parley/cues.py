@@ -45,6 +45,7 @@ PATTERNS = {
     "done": [(783.99, 0.07), (523.25, 0.15)],    # G5 -> C5 falling, resolved
     "cancel": [(466.16, 0.07), (349.23, 0.15)],  # Bb4 -> F4 falling, dropped
     "stop": [(392.00, 0.045), (392.00, 0.075)],  # two low G4 taps, speech stopped
+    "error": [(349.23, 0.06), (311.13, 0.08)],   # F4 -> Eb4, output failed
 }
 
 

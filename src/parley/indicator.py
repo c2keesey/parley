@@ -50,8 +50,14 @@ def _badge():
 def text(viewing_pane=""):
     """Badge content, including the listener's current operational state."""
     from parley import hooks, runtime
+    from parley.player import speech_error
 
     snapshot = runtime.snapshot()
+    if speech_error(snapshot):
+        if viewing_pane and not hooks.pane_is_on(viewing_pane):
+            return ""
+        return " ⚠ PARLEY SPEECH ERROR · RUN PARLEY STATUS "
+
     state = snapshot["listener"]["state"]
     if state == "off":
         return ""

@@ -11,12 +11,13 @@ def result(stdout="", returncode=0):
 
 
 def status(listener="ready", pane="%42", queue=0, synthesis="idle",
-           playback="idle", available=True):
+           playback="idle", available=True, errors=None):
     return {
         "listener": {"state": listener},
         "target": {"id": pane, "available": available},
         "queue": {"depth": queue},
         "speech": {"synthesis": synthesis, "playback": playback},
+        "errors": list(errors or []),
     }
 
 
@@ -27,6 +28,22 @@ def test_indicator_is_blank_when_listener_is_not_alive(monkeypatch):
         lambda pane: (_ for _ in ()).throw(AssertionError("must not resolve")),
     )
     assert indicator.text() == ""
+
+
+def test_indicator_surfaces_speech_error_without_response_content(monkeypatch):
+    monkeypatch.setattr(
+        runtime,
+        "snapshot",
+        lambda: status(listener="off", errors=[{
+            "code": "synthesis_failed",
+            "component": "speech",
+            "stage": "synthesize",
+            "provider": "openai",
+            "at": 1,
+        }]),
+    )
+
+    assert indicator.text() == " ⚠ PARLEY SPEECH ERROR · RUN PARLEY STATUS "
 
 
 def test_indicator_names_the_dictation_target(monkeypatch):

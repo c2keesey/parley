@@ -63,6 +63,25 @@ def test_status_replaces_corrupt_private_fields_instead_of_printing_them(
     assert "recent error snapshot_invalid (runtime/status)" in output
 
 
+def _write_speech_error(tmp_path, monkeypatch, stage="synthesis"):
+    monkeypatch.setattr(config, "STATE", tmp_path)
+    monkeypatch.setattr(
+        cli.runtime.processes,
+        "process_identity",
+        lambda pid: f"linux:00000000-0000-0000-0000-000000000000:{pid}",
+    )
+    writer = cli.runtime.claim("speech")
+    if stage == "synthesis":
+        cli.runtime.set_speech(writer, synthesis="degraded", playback="idle")
+        code, runtime_stage = "synthesis_failed", "synthesize"
+    else:
+        cli.runtime.set_speech(writer, synthesis="idle", playback="degraded")
+        code, runtime_stage = "playback_failed", "play"
+    cli.runtime.record_error(
+        writer, code, "speech", runtime_stage, "openai",
+    )
+
+
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
     monkeypatch.setattr(
         cli.runtime,
@@ -80,6 +99,37 @@ def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
     cli.main(["listen", "status"])
 
     assert "sends to ivory-lynx (pane %531)" in capsys.readouterr().out
+
+
+def test_status_reports_sanitized_speech_failure(tmp_path, monkeypatch, capsys):
+    _write_speech_error(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli.hooks, "session_keys", lambda: ["test"])
+    monkeypatch.setattr(cli.hooks, "is_on", lambda keys: False)
+    monkeypatch.setattr(config, "provider", lambda: "openai")
+    monkeypatch.setattr(config, "active_voice", lambda: "test-voice")
+    monkeypatch.setattr(config, "active_model", lambda: "test-model")
+
+    cli.main(["status"])
+
+    error = capsys.readouterr().err
+    assert "provider=openai, stage=synthesis" in error
+    assert "dropped after one attempt" in error
+    assert "To retry" in error
+
+
+def test_say_wait_exits_nonzero_when_every_block_failed(
+        tmp_path, monkeypatch, capsys):
+    _write_speech_error(tmp_path, monkeypatch, stage="playback")
+    monkeypatch.setattr(cli, "enqueue", lambda *args, **kwargs: True)
+    monkeypatch.setattr(cli, "drain", lambda: False)
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["say", "synthetic block", "--wait"])
+
+    assert raised.value.code == 1
+    error = capsys.readouterr().err
+    assert "provider=openai, stage=playback" in error
+    assert "check afplay" in error
 
 
 def _stub_enrollment(monkeypatch):

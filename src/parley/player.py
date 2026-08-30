@@ -20,10 +20,90 @@ from parley.tts import synthesize
 
 SENTENCE_BOUNDARY = re.compile(r'''[.!?]["'\u2019\u201d)\]]*(?=\s)''')
 RESUME_REWIND_SECONDS = 0.25
+ERROR_PROVIDERS = frozenset({"openai", "elevenlabs", "macos"})
 
 
 class PlaybackError(RuntimeError):
-    """The local audio process failed without an intentional interruption."""
+    """A local audio process failed without an intentional interruption."""
+
+
+def speech_error(snapshot=None):
+    """The last allow-listed speech failure from the shared runtime snapshot."""
+    snapshot = snapshot or runtime.snapshot()
+    for error in reversed(snapshot["errors"]):
+        if error["code"] not in {"synthesis_failed", "playback_failed"}:
+            continue
+        return {
+            "provider": error.get("provider", "unknown"),
+            "stage": (
+                "synthesis" if error["code"] == "synthesis_failed"
+                else "playback"
+            ),
+            "policy": "drop-after-one-attempt",
+            "retry": "manual",
+        }
+    return None
+
+
+def speech_error_message(error=None):
+    """Actionable CLI text built only from allow-listed operational fields."""
+    error = error or speech_error()
+    if not error:
+        return ""
+    provider = error["provider"]
+    stage = error["stage"]
+    if stage == "playback":
+        guidance = "check afplay and the selected audio output"
+    elif provider == "macos":
+        guidance = "check that the selected macOS voice is installed"
+    else:
+        guidance = "check provider credentials, voice/model, and network"
+    return (
+        f"parley: speech failed (provider={provider}, stage={stage}); "
+        "the failed block was dropped after one attempt. "
+        f"To retry, {guidance}, then run parley say --wait again."
+    )
+
+
+def _safe_provider(provider):
+    return provider if provider in ERROR_PROVIDERS else "unknown"
+
+
+def _record_speech_error(writer, provider, stage, indicate):
+    """Publish and indicate a failure without exception or content fields."""
+    provider = _safe_provider(provider)
+    if stage == "synthesis":
+        runtime.set_speech(writer, synthesis="degraded", playback="idle")
+        code, runtime_stage = "synthesis_failed", "synthesize"
+    else:
+        runtime.set_speech(writer, synthesis="idle", playback="degraded")
+        code, runtime_stage = "playback_failed", "play"
+    runtime.record_error(
+        writer, code, "speech", runtime_stage, provider,
+    )
+    config.log(
+        f"speech failure provider={provider} stage={stage} "
+        "policy=drop-after-one-attempt retry=manual"
+    )
+    from parley import indicator
+
+    indicator.refresh()
+    if indicate:
+        from parley import cues
+
+        try:
+            cues.play("error", wait=False)
+        except Exception:
+            # The persistent visual/status indication remains available when
+            # local cue playback is itself unavailable.
+            pass
+
+
+def _clear_speech_error(writer):
+    runtime.clear_errors(writer, {"synthesis_failed", "playback_failed"})
+    from parley import indicator
+
+    indicator.refresh()
 
 
 def chunks(text, limit=None):
@@ -285,6 +365,8 @@ def drain():
     woke = False
     spoke = False
     last_failure = None
+    attempted = 0
+    failures = 0
     interrupt = _interrupt_token()
     ownership = processes.claim(config.DRAIN_PID, os.getpid(), "drainer")
     try:
@@ -302,7 +384,9 @@ def drain():
                         from parley import cues
 
                         cues.play("done")
-                    return True
+                    if spoke and failures == 0:
+                        _clear_speech_error(writer)
+                    return attempted == 0 or failures < attempted
             item = items[0]
             try:
                 job = json.loads(item.read_text())
@@ -311,8 +395,8 @@ def drain():
                 continue
             item.unlink(missing_ok=True)
             runtime.refresh_queue()
+            attempted += 1
             skip = _skip_token()
-            stage = "synthesize"
             job_provider = job.get("provider", "unknown")
             safe_provider = (
                 job_provider
@@ -332,12 +416,18 @@ def drain():
                         job.get("provider"),
                     )
                 config.log(
-                    f"spoke {job.get('voice')} {len(job['text'])}c "
+                    f"spoke {len(job['text'])}c "
                     f"synth={time.time() - started:.1f}s {len(audio)}b"
                 )
-                stage = "play"
                 runtime.set_speech(
                     writer, synthesis="idle", playback="active")
+            except Exception:
+                _record_speech_error(
+                    writer, safe_provider, "synthesis", indicate=failures == 0)
+                last_failure = "synthesize"
+                failures += 1
+                continue
+            try:
                 if _interrupt_token() != interrupt:
                     config.log("speech interrupted before playback")
                     return True
@@ -370,26 +460,10 @@ def drain():
                 runtime.set_speech(
                     writer, synthesis="idle", playback="idle")
             except Exception:
-                last_failure = stage
-                if stage == "synthesize":
-                    runtime.set_speech(
-                        writer, synthesis="degraded", playback="idle")
-                    runtime.record_error(
-                        writer,
-                        "synthesis_failed", "speech", "synthesize",
-                        safe_provider,
-                    )
-                else:
-                    runtime.set_speech(
-                        writer, synthesis="idle", playback="degraded")
-                    runtime.record_error(
-                        writer,
-                        "playback_failed", "speech", "play",
-                        safe_provider,
-                    )
-                config.log(
-                    f"speech failure provider={safe_provider} "
-                    f"stage={stage}")
+                _record_speech_error(
+                    writer, safe_provider, "playback", indicate=failures == 0)
+                last_failure = "play"
+                failures += 1
     finally:
         processes.release(ownership)
         runtime.refresh_queue()

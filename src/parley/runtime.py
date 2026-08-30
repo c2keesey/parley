@@ -664,3 +664,29 @@ def record_error(writer, code, component, stage, provider=None):
 
     _value, accepted = _best_effort_update(mutate)
     return accepted
+
+
+def clear_errors(writer, codes):
+    """Clear selected speech errors only for the current speech capability."""
+    allowed = frozenset(codes)
+    if (
+        not isinstance(writer, Writer)
+        or writer.component != "speech"
+        or not allowed <= {"synthesis_failed", "playback_failed"}
+    ):
+        return False
+
+    def mutate(value):
+        if not _owns(value, writer):
+            return False
+        retained = [
+            error for error in value["errors"] if error["code"] not in allowed
+        ]
+        if retained == value["errors"]:
+            return False
+        value["errors"] = retained
+        value["writers"]["speech"]["heartbeat_at"] = time.time()
+        return True
+
+    _value, accepted = _best_effort_update(mutate)
+    return accepted

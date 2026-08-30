@@ -81,8 +81,8 @@ def _macos(text, voice=None, model=None):
             check=False,
         )
         if result.returncode != 0:
-            detail = (result.stderr or "local synthesis failed").strip()[:200]
-            raise RuntimeError(f"macos say -> {result.returncode}: {detail}")
+            raise RuntimeError(
+                f"macOS synthesis failed (status {result.returncode})")
         return path.read_bytes()
     finally:
         path.unlink(missing_ok=True)
@@ -125,10 +125,12 @@ def _openai(text, voice=None, model=None):
         try:
             return call(name)
         except urllib.error.HTTPError as exc:
-            detail = exc.read()[:200].decode(errors="replace")
-            failure = f"{name} -> {exc.code}: {detail}"
-            config.log(f"synth failed {failure}")
-    raise RuntimeError(failure or "synthesis failed")
+            failure = f"OpenAI synthesis failed (HTTP {exc.code})"
+            config.log(f"synth failed provider=openai status={exc.code}")
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            config.log("synth failed provider=openai transport=unavailable")
+            raise RuntimeError("OpenAI synthesis transport failed") from exc
+    raise RuntimeError(failure or "OpenAI synthesis failed")
 
 
 def _elevenlabs(text, voice=None, model=None):
@@ -160,10 +162,12 @@ def _elevenlabs(text, voice=None, model=None):
     try:
         return urllib.request.urlopen(request, timeout=90).read()
     except urllib.error.HTTPError as exc:
-        detail = exc.read()[:200].decode(errors="replace")
-        failure = f"elevenlabs -> {exc.code}: {detail}"
-        config.log(f"synth failed {failure}")
-        raise RuntimeError(failure) from exc
+        config.log(f"synth failed provider=elevenlabs status={exc.code}")
+        raise RuntimeError(
+            f"ElevenLabs synthesis failed (HTTP {exc.code})") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        config.log("synth failed provider=elevenlabs transport=unavailable")
+        raise RuntimeError("ElevenLabs synthesis transport failed") from exc
 
 
 def voices():
