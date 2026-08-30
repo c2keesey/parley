@@ -101,6 +101,13 @@ parley stop               # drop the queue, silence everything
 parley default on         # new sessions start speaking
 ```
 
+If synthesis or playback fails, Parley attempts one local error cue and records
+a sanitized operational error for `parley status` and the tmux badge. Each
+queued block is attempted once, including the configured `auto` fallback chain,
+then dropped; Parley never silently requeues content that might later be spoken
+out of context. After fixing the reported provider or playback stage, retry
+explicitly with `parley say --wait`. A later clean drain clears the error state.
+
 Turning it on mid-session works without a restart: the confirmation it prints
 is the same instruction the startup hook injects, so it lands in the transcript
 as context.
@@ -156,9 +163,10 @@ listening and removes the repeated wake phrase from the message it sends.
 
 The cue meanings are deliberately distinct: one warm tone means capture is
 open, a soft rising pair means the message was sent, two low taps confirm that
-speech was stopped, one quiet dot means speech playback finished, and a darker
-falling pair means capture was discarded or expired. Each played cue is logged
-by name and source in `~/.parley/speak.log`.
+speech was stopped, one quiet dot means speech playback finished, a darker
+falling pair means capture was discarded or expired, and a low falling pair
+means speech output failed. Each played cue is logged by name and source in
+`~/.parley/speak.log`.
 
 While Parley is speaking, **"okay computer, stop talking"** is a dedicated
 local voice-control command. It immediately skips only the current spoken
@@ -285,7 +293,9 @@ your first few words.
 
 `~/.parley/speak.log` records what was spoken, in which voice, and how
 long synthesis took. It records message lengths and operational events, not
-the text you dictate or the text spoken back.
+the text you dictate or the text spoken back. The private
+`~/.parley/speech-error.json` marker contains only the provider, failure stage,
+and retry/drop policy; it never contains response text or provider diagnostics.
 
 ## Privacy
 

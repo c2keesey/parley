@@ -9,8 +9,12 @@ Parley-operated backend.
 - Personalized trigger matching. Enrollment keeps raw recordings in memory and
   saves only normalized acoustic feature arrays under `~/.parley/triggers`.
 - Session routing, notification cues, and playback coordination.
-- Operational logs. Logs contain timestamps, cue names, provider errors,
-  timing, byte counts, and message lengths—not dictated or spoken message text.
+- Operational logs. Logs contain timestamps, cue names, sanitized provider and
+  failure-stage fields, timing, byte counts, and message lengths—not dictated
+  or spoken message text or provider response bodies.
+- The last speech failure marker. It contains only an allow-listed provider,
+  synthesis/playback stage, and the fixed retry/drop policy so local status can
+  remain actionable without retaining response text or provider diagnostics.
 
 Before a wake phrase is accepted, short speech bursts may be processed by the
 local recognizer and are then discarded. Once capture begins, audio is held in
