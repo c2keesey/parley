@@ -1,9 +1,12 @@
 import os
 import shutil
 import subprocess
+import uuid
 from types import SimpleNamespace
 
-from parley import hooks, indicator, listen
+import pytest
+
+from parley import config, hooks, indicator, listen
 
 
 def result(stdout="", returncode=0):
@@ -57,12 +60,12 @@ def test_real_tmux_sessions_surface_a_stale_target(monkeypatch):
     """Exercise the actual tmux identity boundary that made this bug silent."""
     if not shutil.which("tmux"):
         return
-    socket = f"parley-indicator-test-{os.getpid()}"
+    socket = f"parley-indicator-test-{os.getpid()}-{uuid.uuid4().hex}"
 
     def tmux(*args):
         return subprocess.run(
-            ["tmux", "-L", socket, *args], capture_output=True, text=True,
-            check=False,
+            ["tmux", "-f", "/dev/null", "-L", socket, *args],
+            capture_output=True, text=True, check=False,
         )
 
     assert tmux("new-session", "-d", "-s", "old-target").returncode == 0
@@ -128,45 +131,111 @@ def test_agent_deck_tmux_identity_becomes_a_readable_label(monkeypatch):
     assert indicator.session_label("%42") == "c2k-8"
 
 
-def test_ensure_appends_badge_to_every_session_and_is_idempotent(monkeypatch):
-    calls = []
-    bars = {
-        "one": "existing one",
-        "two": (
-            "existing two #[bg=#ff9e64,fg=#1a1b26,bold]"
-            "#(parley indicator)#[default]"
-        ),
-    }
+@pytest.fixture
+def isolated_tmux(tmp_path, monkeypatch):
+    """A tmux server created and destroyed by this test process only."""
+    if not shutil.which("tmux"):
+        pytest.skip("tmux is not installed")
+    socket = f"parley-9ka14-test-{os.getpid()}-{uuid.uuid4().hex}"
 
-    def run(argv, timeout=2):
-        calls.append(argv)
-        if argv[1:3] == ["list-sessions", "-F"]:
-            return result("one\ntwo\n")
-        if argv[1:4] == ["show-options", "-v", "-t"]:
-            session, option = argv[4], argv[5]
-            return result((bars[session] if option == "status-right" else "100") + "\n")
-        if argv[1:3] == ["set-option", "-t"]:
-            session, option, value = argv[3], argv[4], argv[5]
-            if option == "status-right":
-                bars[session] = value
-            return result()
-        return result()
+    def tmux(*args):
+        return subprocess.run(
+            ["tmux", "-f", "/dev/null", "-L", socket, *args],
+            capture_output=True, text=True, check=False,
+        )
 
-    monkeypatch.setattr(indicator, "_run", run)
-    assert indicator.ensure() == 2
-    assert bars["one"] == f"existing one {indicator._badge()}"
-    assert bars["two"] == f"existing two {indicator._badge()}"
-    assert "#{pane_id}" in bars["one"]
-    length_updates = [
-        call for call in calls
-        if call[1:3] == ["set-option", "-t"]
-        and call[4] == "status-right-length"
-    ]
-    assert {call[3] for call in length_updates} == {"one", "two"}
+    monkeypatch.setattr(
+        indicator, "_run", lambda argv, timeout=2: tmux(*argv[1:]))
+    monkeypatch.setattr(config, "SESSIONS", tmp_path / "sessions")
+    try:
+        yield tmux
+    finally:
+        tmux("kill-server")
 
-    calls.clear()
-    assert indicator.ensure() == 0
-    assert not any(
-        call[1:3] == ["set-option", "-t"] and call[4] == "status-right"
-        for call in calls
+
+def _tmux_option(tmux, session, option, *, local=False):
+    flags = ["show-options", "-qv" if local else "-Av"]
+    return tmux(*flags, "-t", session, option).stdout.rstrip("\n")
+
+
+def test_indicator_lifecycle_is_opt_in_idempotent_and_reversible(isolated_tmux):
+    tmux = isolated_tmux
+    assert tmux("new-session", "-d", "-s", "opted-in").returncode == 0
+    assert tmux("new-session", "-d", "-s", "unrelated").returncode == 0
+    pane = tmux(
+        "display-message", "-p", "-t", "opted-in", "#{pane_id}",
+    ).stdout.strip()
+    hooks.turn_on([hooks.pane_key(pane)])
+
+    custom = "USER-CUSTOM " + ("status-content-" * 20) + "#[fg=blue]tail"
+    unrelated = "UNRELATED #(parley indicator user-owned) #[fg=green]keep"
+    tmux("set-option", "-t", "opted-in", "status-right", custom)
+    tmux("set-option", "-t", "opted-in", "status-right-length", "37")
+    tmux("set-option", "-t", "unrelated", "status-right", unrelated)
+    tmux("set-option", "-t", "unrelated", "status-right-length", "43")
+
+    unrelated_before = (
+        _tmux_option(tmux, "unrelated", "status-right"),
+        _tmux_option(tmux, "unrelated", "status-right-length"),
     )
+    assert indicator.ensure() == 1
+    installed = _tmux_option(tmux, "opted-in", "status-right")
+    assert installed == f"{custom} {indicator._badge()}"
+    assert _tmux_option(tmux, "opted-in", "status-right-length") == "220"
+    assert _tmux_option(tmux, "opted-in", indicator.STATE_OPTION, local=True)
+    assert (
+        _tmux_option(tmux, "unrelated", "status-right"),
+        _tmux_option(tmux, "unrelated", "status-right-length"),
+    ) == unrelated_before
+
+    assert indicator.ensure() == 0
+    assert _tmux_option(tmux, "opted-in", "status-right") == installed
+
+    assert indicator.cleanup() == 1
+    assert _tmux_option(tmux, "opted-in", "status-right") == custom
+    assert _tmux_option(tmux, "opted-in", "status-right-length") == "37"
+    assert not _tmux_option(
+        tmux, "opted-in", indicator.STATE_OPTION, local=True)
+
+    # User edits made during the lifecycle win; cleanup removes only our badge.
+    assert indicator.ensure() == 1
+    late = " #[fg=yellow]USER-LATE"
+    active = _tmux_option(tmux, "opted-in", "status-right")
+    tmux("set-option", "-t", "opted-in", "status-right", active + late)
+    tmux("set-option", "-t", "opted-in", "status-right-length", "73")
+    assert indicator.cleanup() == 1
+    assert _tmux_option(tmux, "opted-in", "status-right") == custom + late
+    assert _tmux_option(tmux, "opted-in", "status-right-length") == "73"
+
+    # A stale opted-in pane disappears without causing unrelated mutations.
+    assert tmux("kill-session", "-t", "opted-in").returncode == 0
+    assert indicator.ensure() == 0
+    assert (
+        _tmux_option(tmux, "unrelated", "status-right"),
+        _tmux_option(tmux, "unrelated", "status-right-length"),
+    ) == unrelated_before
+
+
+def test_cleanup_restores_inherited_options_without_freezing_them(isolated_tmux):
+    tmux = isolated_tmux
+    assert tmux("new-session", "-d", "-s", "inherited").returncode == 0
+    tmux("set-option", "-g", "status-right", "GLOBAL-BEFORE")
+    tmux("set-option", "-g", "status-right-length", "39")
+    pane = tmux(
+        "display-message", "-p", "-t", "inherited", "#{pane_id}",
+    ).stdout.strip()
+    hooks.turn_on([hooks.pane_key(pane)])
+
+    assert not _tmux_option(tmux, "inherited", "status-right", local=True)
+    assert not _tmux_option(
+        tmux, "inherited", "status-right-length", local=True)
+    assert indicator.ensure() == 1
+
+    tmux("set-option", "-g", "status-right", "GLOBAL-AFTER")
+    tmux("set-option", "-g", "status-right-length", "55")
+    assert indicator.cleanup() == 1
+    assert not _tmux_option(tmux, "inherited", "status-right", local=True)
+    assert not _tmux_option(
+        tmux, "inherited", "status-right-length", local=True)
+    assert _tmux_option(tmux, "inherited", "status-right") == "GLOBAL-AFTER"
+    assert _tmux_option(tmux, "inherited", "status-right-length") == "55"
