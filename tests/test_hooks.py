@@ -1,4 +1,6 @@
 import json
+import stat
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -76,16 +78,41 @@ def test_matching_any_identity_counts(monkeypatch):
 
 def test_reply_read_from_a_direct_message():
     """Codex hands over the text; there is no transcript to parse."""
-    reply_id, text = hooks.reply_from({"last-assistant-message": "all done"})
+    reply_id, text = hooks.reply_from({
+        "thread-id": "thread-1",
+        "turn-id": "turn-1",
+        "last-assistant-message": "all done",
+    })
     assert text == "all done"
-    assert reply_id.startswith("direct-")
+    assert reply_id == "turn:thread-1:turn-1"
 
 
-def test_direct_reply_ids_are_stable_and_content_addressed():
-    first, _ = hooks.reply_from({"last-assistant-message": "same"})
-    second, _ = hooks.reply_from({"last-assistant-message": "same"})
-    third, _ = hooks.reply_from({"last-assistant-message": "different"})
-    assert first == second != third
+def test_current_codex_stop_payload_uses_underscore_turn_id():
+    assert hooks.reply_from({
+        "session_id": "thread-1",
+        "turn_id": "turn-1",
+        "last_assistant_message": "all done",
+    }) == ("turn:thread-1:turn-1", "all done")
+
+
+def test_direct_reply_ids_use_supported_turn_identity_not_content():
+    first, _ = hooks.reply_from({
+        "thread-id": "thread-1", "turn-id": "turn-1",
+        "last-assistant-message": "same",
+    })
+    duplicate, _ = hooks.reply_from({
+        "thread-id": "thread-1", "turn-id": "turn-1",
+        "last-assistant-message": "same",
+    })
+    distinct, _ = hooks.reply_from({
+        "thread-id": "thread-1", "turn-id": "turn-2",
+        "last-assistant-message": "same",
+    })
+    assert first == duplicate != distinct
+
+
+def test_direct_reply_without_a_supported_turn_identity_yields_nothing():
+    assert hooks.reply_from({"last-assistant-message": "same"}) == ("", "")
 
 
 def test_reply_read_from_a_transcript(tmp_path):
@@ -97,6 +124,19 @@ def test_reply_read_from_a_transcript(tmp_path):
          "message": {"content": [{"type": "text", "text": "done"}]}},
     ]))
     assert hooks.reply_from({"transcript_path": str(path)}) == ("a1", "done")
+
+
+def test_claude_direct_text_uses_transcript_identity(tmp_path):
+    path = tmp_path / "t.jsonl"
+    path.write_text("\n".join(json.dumps(e) for e in [
+        {"type": "user", "message": {"content": "go"}},
+        {"type": "assistant", "uuid": "a1",
+         "message": {"content": [{"type": "text", "text": "done"}]}},
+    ]))
+    assert hooks.reply_from({
+        "last_assistant_message": "done",
+        "transcript_path": str(path),
+    }) == ("a1", "done")
 
 
 def test_unknown_payload_yields_nothing():
@@ -167,13 +207,125 @@ def test_automatic_reply_is_enqueued_with_its_session_name(monkeypatch):
     queued = []
     monkeypatch.setattr(hooks, "reply_from", lambda payload: ("reply-1", "hello"))
     monkeypatch.setattr(hooks, "session_label", lambda payload: "windy-falcon")
-    monkeypatch.setattr(hooks, "enqueue", queued.append)
+    monkeypatch.setattr(
+        hooks, "enqueue", lambda text, receipt=None: queued.append(text))
     monkeypatch.setattr(hooks, "drain", lambda: None)
     monkeypatch.setattr(hooks.time, "sleep", lambda seconds: None)
 
     hooks.speak_reply("pane-42", {})
 
     assert queued == ["Session windy-falcon. hello"]
+
+
+def test_transcript_reply_still_settles_to_the_final_message(monkeypatch):
+    queued = []
+    replies = iter([
+        ("draft-id", "draft reply"),
+        ("final-id", "final reply"),
+        ("final-id", "final reply"),
+    ])
+    monkeypatch.setattr(hooks, "reply_from", lambda payload: next(replies))
+    monkeypatch.setattr(hooks, "session_label", lambda payload: "session")
+    monkeypatch.setattr(
+        hooks, "enqueue", lambda text, receipt=None: queued.append(text))
+    monkeypatch.setattr(hooks, "drain", lambda: None)
+    monkeypatch.setattr(hooks.time, "sleep", lambda seconds: None)
+
+    hooks.speak_reply("pane-42", {})
+
+    assert queued == ["Session session. final reply"]
+
+
+def test_distinct_turns_with_identical_text_are_each_enqueued(monkeypatch):
+    queued = []
+    monkeypatch.setattr(
+        hooks, "enqueue", lambda text, receipt=None: queued.append(text))
+    monkeypatch.setattr(hooks, "drain", lambda: None)
+    monkeypatch.setattr(hooks.time, "sleep", lambda seconds: None)
+    common = {
+        "thread-id": "thread-1",
+        "last-assistant-message": "same reply",
+    }
+
+    hooks.speak_reply("pane-42", {**common, "turn-id": "turn-1"})
+    hooks.speak_reply("pane-42", {**common, "turn-id": "turn-2"})
+
+    assert len(queued) == 2
+
+
+def test_duplicate_delivery_of_one_turn_is_enqueued_once(monkeypatch):
+    queued = []
+    monkeypatch.setattr(
+        hooks, "enqueue", lambda text, receipt=None: queued.append(text))
+    monkeypatch.setattr(hooks, "drain", lambda: None)
+    monkeypatch.setattr(hooks.time, "sleep", lambda seconds: None)
+    payload = {
+        "thread-id": "thread-1",
+        "turn-id": "turn-1",
+        "last-assistant-message": "one reply",
+    }
+
+    hooks.speak_reply("pane-42", payload)
+    hooks.speak_reply("pane-42", payload)
+
+    assert len(queued) == 1
+
+
+def test_concurrent_duplicate_delivery_is_atomically_enqueued_once(monkeypatch):
+    queued = []
+    queued_lock = threading.Lock()
+    both_resolved = threading.Barrier(2)
+
+    def reply(payload):
+        if not payload.get("resolved"):
+            payload["resolved"] = True
+            both_resolved.wait(timeout=2)
+        return "turn:thread-1:turn-1", "race reply"
+
+    def enqueue(text, receipt=None):
+        with queued_lock:
+            queued.append(text)
+
+    monkeypatch.setattr(hooks, "reply_from", reply)
+    monkeypatch.setattr(hooks, "enqueue", enqueue)
+    monkeypatch.setattr(hooks, "drain", lambda: None)
+    monkeypatch.setattr(hooks.time, "sleep", lambda seconds: None)
+    workers = [
+        threading.Thread(target=hooks.speak_reply, args=("pane-42", {}))
+        for _ in range(2)
+    ]
+
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=3)
+
+    assert all(not worker.is_alive() for worker in workers)
+    assert len(queued) == 1
+
+
+def test_dedup_history_is_bounded_and_private(monkeypatch):
+    monkeypatch.setattr(hooks, "DEDUP_HISTORY", 2)
+    monkeypatch.setattr(hooks, "enqueue", lambda text, receipt=None: True)
+    monkeypatch.setattr(hooks, "drain", lambda: None)
+    monkeypatch.setattr(hooks.time, "sleep", lambda seconds: None)
+
+    for index in range(5):
+        hooks.speak_reply("pane-42", {
+            "thread-id": "thread-1",
+            "turn-id": f"turn-{index}",
+            "last-assistant-message": "private reply",
+        })
+
+    session = config.SPOKEN / "pane-42.dedup"
+    receipts = [entry for entry in session.iterdir() if entry.is_dir()]
+    assert len(receipts) == 2
+    assert stat.S_IMODE(session.stat().st_mode) == 0o700
+    assert stat.S_IMODE((session / ".lock").stat().st_mode) == 0o600
+    for receipt in receipts:
+        assert stat.S_IMODE(receipt.stat().st_mode) == 0o700
+        assert stat.S_IMODE((receipt / "committed").stat().st_mode) == 0o600
+        assert "private reply" not in receipt.name
 
 
 def test_malformed_payload_is_survivable(monkeypatch):

@@ -56,6 +56,7 @@ def final_reply(path):
         if entry.get("type") != "assistant" or entry.get("isSidechain"):
             continue
         text = _text_of(entry)
-        if text:
-            return entry.get("uuid") or text[:64], text
+        message_id = entry.get("uuid")
+        if text and isinstance(message_id, str) and message_id:
+            return message_id, text
     return "", ""

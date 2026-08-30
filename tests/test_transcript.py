@@ -68,3 +68,12 @@ def test_ignores_tool_only_entries_and_subagents(tmp_path):
 
 def test_missing_file_is_not_an_error(tmp_path):
     assert final_reply(str(tmp_path / "nope.jsonl")) == ("", "")
+
+
+def test_reply_text_is_never_used_as_a_fallback_identifier(tmp_path):
+    path = write(tmp_path, [
+        user("go"),
+        {"type": "assistant",
+         "message": {"content": [{"type": "text", "text": "private reply"}]}},
+    ])
+    assert final_reply(path) == ("", "")

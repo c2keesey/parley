@@ -12,6 +12,7 @@ from parley import config, indicator, player
 def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE", tmp_path)
     monkeypatch.setattr(config, "QUEUE", tmp_path / "queue")
+    monkeypatch.setattr(config, "SPOKEN", tmp_path / "spoken")
     monkeypatch.setattr(config, "LOCK", tmp_path / "player.lock")
     monkeypatch.setattr(config, "PIDFILE", tmp_path / "playing.pid")
     monkeypatch.setattr(config, "SPEECH_PID", tmp_path / "speech.pid")
@@ -154,6 +155,62 @@ def test_queued_reply_is_private_on_disk():
     queued = player._pending()[0]
     assert stat.S_IMODE(queued.stat().st_mode) == 0o600
     assert stat.S_IMODE(config.QUEUE.stat().st_mode) == 0o700
+
+
+def test_durable_enqueue_is_idempotent_private_and_recoverable(
+        recorder, tmp_path):
+    receipt = tmp_path / "spoken" / "session" / "event-token"
+
+    assert player.enqueue("private assistant reply", receipt=receipt)
+    assert player.enqueue("private assistant reply", receipt=receipt)
+    assert len(player._pending()) == 1
+    assert stat.S_IMODE(receipt.stat().st_mode) == 0o700
+    assert stat.S_IMODE((receipt / "manifest.json").stat().st_mode) == 0o600
+    assert stat.S_IMODE((receipt / "0000.job").stat().st_mode) == 0o600
+
+    player.drain()
+
+    assert recorder == ["private assistant reply"]
+    assert player._pending() == []
+    assert (receipt / "0000.done").exists()
+    assert not (receipt / "0000.job").exists()
+    assert not (receipt / "manifest.json").exists()
+    assert not player.enqueue("private assistant reply", receipt=receipt)
+    assert player._pending() == []
+
+
+def test_durable_enqueue_repairs_a_crash_before_queue_publication(
+        monkeypatch, tmp_path):
+    receipt = tmp_path / "spoken" / "session" / "event-token"
+    original_link = player.os.link
+    failed = False
+
+    def fail_once(source, destination):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("simulated crash before publish")
+        return original_link(source, destination)
+
+    monkeypatch.setattr(player.os, "link", fail_once)
+    with pytest.raises(OSError, match="simulated crash"):
+        player.enqueue("recover me", receipt=receipt)
+    assert player._pending() == []
+
+    assert player.enqueue("recover me", receipt=receipt)
+    assert len(player._pending()) == 1
+
+
+def test_durable_queue_recovers_completion_before_unlink_without_replay(
+        recorder, tmp_path):
+    receipt = tmp_path / "spoken" / "session" / "event-token"
+    player.enqueue("do not replay", receipt=receipt)
+    config.private_write(receipt / "0000.done", "1")
+
+    player.drain()
+
+    assert recorder == []
+    assert player._pending() == []
 
 
 def test_stop_clears_the_queue(monkeypatch):

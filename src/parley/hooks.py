@@ -11,6 +11,7 @@ session id. The pane is what voice actually addresses: it is where the reply is
 spoken and where a dictated message is typed back. It also means the same code
 works under a harness that exposes no session id at all.
 """
+import fcntl
 import hashlib
 import json
 import os
@@ -33,6 +34,7 @@ TARGETS = {
 COMMAND = "parley hook"
 EVENT = "Stop"
 TIMEOUT = 10
+DEDUP_HISTORY = 64
 
 SESSION_VARS = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID")
 DIRECT_KEYS = ("last-assistant-message", "last_assistant_message",
@@ -138,12 +140,24 @@ def turn_off(keys):
 
 def reply_from(payload):
     """(id, text) of the reply, however this harness chose to report it."""
+    text = ""
     for key in DIRECT_KEYS:
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             text = value.strip()
-            digest = hashlib.sha256(text.encode()).hexdigest()[:16]
-            return f"direct-{digest}", text
+            break
+    turn_id = next(
+        (payload.get(key) for key in ("turn_id", "turn-id")
+         if isinstance(payload.get(key), str) and payload.get(key).strip()),
+        "",
+    )
+    if text and turn_id:
+        session_id = next(
+            (payload.get(key) for key in ("session_id", "thread_id", "thread-id")
+             if isinstance(payload.get(key), str) and payload.get(key).strip()),
+            "",
+        )
+        return f"turn:{session_id}:{turn_id}", text
     for key in ("transcript_path", "rollout_path", "transcript"):
         path = payload.get(key)
         if path:
@@ -151,14 +165,40 @@ def reply_from(payload):
     return "", ""
 
 
+def _dedup_directory(marker_key, reply_id):
+    session = config.SPOKEN / f"{_clean(marker_key)}.dedup"
+    digest = hashlib.sha256(reply_id.encode()).hexdigest()[:32]
+    return session, session / digest
+
+
+def _receipt_pending(receipt):
+    for job in receipt.glob("*.job"):
+        try:
+            queued = job.stat().st_nlink > 1
+        except OSError:
+            queued = False
+        if queued or not job.with_suffix(".done").exists():
+            return True
+    return False
+
+
+def _prune_dedup(session):
+    completed = []
+    for receipt in session.iterdir():
+        if not receipt.is_dir() or not (receipt / "committed").exists():
+            continue
+        if _receipt_pending(receipt):
+            continue
+        try:
+            completed.append(((receipt / "committed").stat().st_mtime_ns, receipt))
+        except OSError:
+            continue
+    for _, receipt in sorted(completed)[:-DEDUP_HISTORY]:
+        shutil.rmtree(receipt, ignore_errors=True)
+
+
 def speak_reply(marker_key, payload):
     """Speak this turn's reply, waiting for it if the hook fired early."""
-    seen = config.SPOKEN / marker_key
-    try:
-        previous = seen.read_text().strip()
-    except OSError:
-        previous = ""
-
     reply_id, text = reply_from(payload)
     if not reply_id:
         # Transcript-based harnesses can fire before the reply is flushed.
@@ -167,7 +207,7 @@ def speak_reply(marker_key, payload):
             time.sleep(0.2)
             reply_id, text = reply_from(payload)
 
-    if not reply_id or reply_id == previous:
+    if not reply_id:
         config.log("no new reply to speak")
         return
 
@@ -180,10 +220,34 @@ def speak_reply(marker_key, payload):
             break
         reply_id, text = newer_id, newer_text
 
-    seen.parent.mkdir(parents=True, exist_ok=True)
-    seen.write_text(reply_id)
-    enqueue(label_reply(text, payload))
-    drain()
+    session, receipt = _dedup_directory(marker_key, reply_id)
+    config.private_directory(session)
+    lock_descriptor = os.open(session / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    os.fchmod(lock_descriptor, 0o600)
+    should_drain = False
+    duplicate = False
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        committed = receipt / "committed"
+        duplicate = committed.exists()
+        if not duplicate:
+            config.private_directory(receipt)
+            enqueue(label_reply(text, payload), receipt=receipt)
+            # Existence is the commit record, so a partial file is still a
+            # valid durable commit if the process dies during this write.
+            config.private_write(committed, "1")
+        should_drain = not duplicate or _receipt_pending(receipt)
+        _prune_dedup(session)
+    finally:
+        try:
+            fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_descriptor)
+
+    if duplicate:
+        config.log("no new reply to speak")
+    if should_drain:
+        drain()
 
 
 def handle(stream=None, argv=None):

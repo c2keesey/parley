@@ -14,6 +14,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 
 from parley import config
 from parley.tts import synthesize
@@ -46,16 +47,136 @@ def chunks(text, limit=None):
         yield remaining
 
 
-def enqueue(text, voice=None, model=None):
+def _atomic_private_write(path, content):
+    """Replace a private file durably without exposing a partial write."""
+    config.private_directory(path.parent)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        try:
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError:
+            pass
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+
+
+def _durable_enqueue(parts, provider, voice, model, receipt):
+    """Publish idempotent queue items backed by a private durable receipt."""
+    receipt = config.private_directory(receipt)
+    manifest_path = receipt / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+    else:
+        manifest = {
+            "created_ns": time.time_ns(),
+            "jobs": [
+                {
+                    "text": part,
+                    "provider": provider,
+                    "voice": voice,
+                    "model": model,
+                }
+                for part in parts
+            ],
+        }
+        _atomic_private_write(manifest_path, json.dumps(manifest))
+
+    config.private_directory(config.QUEUE)
+    token = receipt.name
+    pending = False
+    receipts = []
+    for index, job in enumerate(manifest["jobs"]):
+        done = receipt / f"{index:04d}.done"
+        job_path = receipt / f"{index:04d}.job"
+        queue_name = f"{int(manifest['created_ns']):020d}-{token}-{index:04d}.json"
+        queue_path = config.QUEUE / queue_name
+        if done.exists():
+            continue
+        if not job_path.exists():
+            durable_job = dict(job, dedup_done=str(done))
+            _atomic_private_write(job_path, json.dumps(durable_job))
+        receipts.append((job_path, queue_path))
+
+    if not receipts:
+        manifest_path.unlink(missing_ok=True)
+        return False
+
+    # Publish only after every receipt exists. A crash before or during this
+    # loop is repaired by linking the still-private receipts on the next hook.
+    for job_path, queue_path in receipts:
+        try:
+            os.link(job_path, queue_path)
+        except FileExistsError:
+            pass
+        pending = True
+    return pending
+
+
+def _complete_durable_item(item, done):
+    """Commit a durable queue outcome, then erase retained reply content."""
+    done = Path(done)
+    config.private_write(done, "1")
+    item.unlink(missing_ok=True)
+    done.with_suffix(".job").unlink(missing_ok=True)
+    manifest = done.parent / "manifest.json"
+    try:
+        count = len(json.loads(manifest.read_text())["jobs"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    if all((done.parent / f"{index:04d}.done").exists()
+           for index in range(count)):
+        manifest.unlink(missing_ok=True)
+
+
+def _durable_done_path(value):
+    """Accept receipt markers only inside Parley's private spoken state."""
+    if not isinstance(value, str) or not value:
+        return None
+    candidate = Path(value)
+    try:
+        candidate.resolve().relative_to(config.SPOKEN.resolve())
+    except (OSError, ValueError):
+        return None
+    return candidate if candidate.suffix == ".done" else None
+
+
+def enqueue(text, voice=None, model=None, receipt=None):
     text = (text or "").strip()
     if not text:
         return False
-    config.private_directory(config.QUEUE)
     provider = config.provider()
     voice = voice or config.active_voice()
     model = model or config.active_model()
+    parts = list(chunks(text))
+    if receipt is not None:
+        queued = _durable_enqueue(parts, provider, voice, model, receipt)
+        if queued:
+            from parley import indicator
+
+            indicator.refresh()
+        return queued
+
+    config.private_directory(config.QUEUE)
     timestamp = time.time_ns()
-    for index, chunk in enumerate(chunks(text)):
+    for index, chunk in enumerate(parts):
         item = {
             "text": chunk,
             "provider": provider,
@@ -319,7 +440,15 @@ def drain():
             except (OSError, ValueError):
                 item.unlink(missing_ok=True)
                 continue
-            item.unlink(missing_ok=True)
+            durable_done = _durable_done_path(job.get("dedup_done"))
+            if durable_done is None:
+                item.unlink(missing_ok=True)
+            elif durable_done.exists():
+                # The completion marker is written before unlinking the queue
+                # hard-link. Recover a crash in that final tiny window without
+                # replaying a block that already reached a terminal outcome.
+                _complete_durable_item(item, durable_done)
+                continue
             skip = _skip_token()
             try:
                 started = time.time()
@@ -362,6 +491,12 @@ def drain():
                 spoke = True
             except Exception as exc:
                 config.log(f"error: {exc}")
+            finally:
+                if durable_done is not None:
+                    # Keep the queue hard-link until the terminal outcome is
+                    # durable. If this process dies first, a later drainer can
+                    # safely retry the still-pending item.
+                    _complete_durable_item(item, durable_done)
     finally:
         try:
             if config.DRAIN_PID.read_text().strip() == str(os.getpid()):
