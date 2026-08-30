@@ -1,6 +1,8 @@
+import os
+
 import pytest
 
-from parley import listen
+from parley import listen, processes
 from parley.listen import (
     contains_phrase,
     contains_wake,
@@ -19,10 +21,17 @@ def isolate_microphone_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(listen.player, "resume", lambda: False)
     monkeypatch.setattr(listen.player, "microphone_active", lambda: False)
     monkeypatch.setattr(listen.player, "output_playing", lambda: False)
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
     monkeypatch.setattr(listen.config, "LISTENER_STATE", tmp_path / "listener.state")
+    monkeypatch.setattr(
+        listen.config, "CUE_PROCESSES", tmp_path / "cue-processes"
+    )
     monkeypatch.setattr(listen.config, "TRIGGERS", tmp_path / "triggers")
     listen.triggers.load.cache_clear()
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+    monkeypatch.setattr(
+        processes, "process_identity", lambda pid: f"test-birth:{pid}"
+    )
 
 
 @pytest.mark.parametrize("heard", [
@@ -150,11 +159,32 @@ def test_listener_state_is_persisted_and_refreshed(tmp_path, monkeypatch):
     refreshed = []
     monkeypatch.setattr(listen.config, "LISTENER_STATE", tmp_path / "state")
     monkeypatch.setattr(listen.indicator, "refresh", lambda: refreshed.append(True))
+    monkeypatch.setattr(listen, "is_running", lambda: os.getpid())
 
     listen.set_listener_state("capturing")
 
     assert listen.listener_state() == "capturing"
     assert refreshed == [True]
+
+
+def test_reused_listener_pid_recovers_state_without_signaling(monkeypatch):
+    births = {4242: "original-birth"}
+    monkeypatch.setattr(processes, "process_identity", births.get)
+    ownership = processes.claim(listen.LISTEN_PID, 4242, "listener")
+    assert ownership is not None
+    listen.config.LISTENER_STATE.write_text("capturing")
+    births[4242] = "unrelated-reused-birth"
+    killed = []
+    monkeypatch.setattr(
+        listen.os, "kill", lambda pid, signal: killed.append((pid, signal))
+    )
+
+    assert listen.listener_state() == "ready"
+    assert not listen.stop()
+
+    assert killed == []
+    assert not listen.LISTEN_PID.exists()
+    assert not listen.config.LISTENER_STATE.exists()
 
 
 def test_submission_log_does_not_include_dictated_text(monkeypatch):

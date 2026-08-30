@@ -18,17 +18,18 @@ from Kenney's CC0 interface pack. Cancel uses the generated darker falling
 tone; the old bundled cancel asset was a misleading rapid multi-click. To use
 your own sound pack instead, point PARLEY_CUE_<NAME> at a wav or mp3 file.
 
-Cues register with the player's pid file, so the listener treats them as
-"the agent is making noise" and will not try to transcribe them.
+Cues publish birth-identified process ownership, so the listener treats them
+as "the agent is making noise" and will not try to transcribe them.
 """
 import math
 import os
 import struct
 import subprocess
+import threading
 import wave
 from pathlib import Path
 
-from parley import config
+from parley import config, processes
 
 RATE = 44100
 AMPLITUDE = 0.10
@@ -108,6 +109,21 @@ def build(name):
     return path
 
 
+def _finish(proc, ownership):
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.terminate()
+            proc.wait(timeout=1)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    except OSError:
+        pass
+    finally:
+        processes.release(ownership)
+
+
 def play(name, wait=True):
     custom = override(name)
     shipped = bundled(name)
@@ -122,17 +138,15 @@ def play(name, wait=True):
     except OSError:
         return
     config.log(f"cue {name} source={source} wait={str(wait).lower()}")
-    # Registered so the listener knows this noise is ours and ignores it.
-    try:
-        with open(config.PIDFILE, "a") as fh:
-            fh.write(f"{proc.pid}\n")
-    except OSError:
-        pass
+    # Birth-identified ownership lets the listener ignore this noise without
+    # ever mistaking a later process that reuses the PID for Parley's child.
+    ownership = processes.claim_in(config.CUE_PROCESSES, proc.pid, "cue")
     if wait:
-        try:
-            proc.wait(timeout=5)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        _finish(proc, ownership)
+    else:
+        threading.Thread(
+            target=_finish, args=(proc, ownership), daemon=True
+        ).start()
 
 
 def rebuild():

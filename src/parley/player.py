@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import time
 
-from parley import config
+from parley import config, processes
 from parley.tts import synthesize
 
 SENTENCE_BOUNDARY = re.compile(r'''[.!?]["'\u2019\u201d)\]]*(?=\s)''')
@@ -119,6 +119,7 @@ def _remaining_audio(path, offset):
 def play(audio, interrupt=None, skip=None):
     config.STATE.mkdir(parents=True, exist_ok=True)
     proc = None
+    ownership = None
     resumed_paths = []
     offset = 0.0
     suffix = ".aiff" if audio.startswith(b"FORM") else ".mp3"
@@ -140,9 +141,7 @@ def play(audio, interrupt=None, skip=None):
             pause_token = _pause_token()
             started = time.monotonic()
             proc = subprocess.Popen(["afplay", playback_path])
-            with open(config.PIDFILE, "a") as fh:
-                fh.write(f"{proc.pid}\n")
-            config.SPEECH_PID.write_text(str(proc.pid))
+            ownership = processes.claim(config.SPEECH_PID, proc.pid, "speech")
             # A turn can open between the gate check and publishing the pid.
             # pause() changes its token before terminating playback, so the
             # exit is distinguishable from both natural completion and stop().
@@ -155,11 +154,8 @@ def play(audio, interrupt=None, skip=None):
                 proc.terminate()
             returncode = proc.wait()
             elapsed = max(0.0, time.monotonic() - started)
-            try:
-                if config.SPEECH_PID.read_text().strip() == str(proc.pid):
-                    config.SPEECH_PID.unlink(missing_ok=True)
-            except OSError:
-                pass
+            processes.release(ownership)
+            ownership = None
             if interrupt is not None and _interrupt_token() != interrupt:
                 return False
             if skip is not None and _skip_token() != skip:
@@ -173,12 +169,7 @@ def play(audio, interrupt=None, skip=None):
                 return False
             config.log(f"speech restarting at {offset:.2f}s after microphone turn")
     finally:
-        try:
-            if proc is not None and config.SPEECH_PID.read_text().strip() == str(
-                    proc.pid):
-                config.SPEECH_PID.unlink(missing_ok=True)
-        except OSError:
-            pass
+        processes.release(ownership)
         from parley import indicator
 
         indicator.refresh()
@@ -213,12 +204,7 @@ def _skip_token():
 
 
 def _pid_alive(path):
-    try:
-        pid = int(path.read_text().strip())
-        os.kill(pid, 0)
-        return True
-    except (OSError, ValueError):
-        return False
+    return bool(processes.owned_pid(path))
 
 
 def microphone_active():
@@ -226,7 +212,7 @@ def microphone_active():
     if _pid_alive(config.MIC_TURN):
         return True
     was_marked = config.MIC_TURN.exists()
-    config.MIC_TURN.unlink(missing_ok=True)
+    processes.clear(config.MIC_TURN)
     if was_marked:
         config.log("recovered stale microphone turn; speech released")
     return False
@@ -247,19 +233,20 @@ def _wait_for_microphone(interrupt=None):
 
 
 def _signal_speech(sig):
-    try:
-        pid = int(config.SPEECH_PID.read_text().strip())
-        os.kill(pid, sig)
-        return True
-    except (OSError, ValueError):
-        config.SPEECH_PID.unlink(missing_ok=True)
-        return False
+    pid = processes.owned_pid(config.SPEECH_PID, "speech")
+    if pid:
+        try:
+            os.kill(pid, sig)
+            return True
+        except OSError:
+            processes.clear(config.SPEECH_PID)
+    return False
 
 
 def pause():
     """Give the microphone the floor while preserving current and queued speech."""
     config.STATE.mkdir(parents=True, exist_ok=True)
-    config.MIC_TURN.write_text(str(os.getpid()))
+    processes.claim(config.MIC_TURN, os.getpid(), "microphone-turn")
     config.private_write(config.PAUSE, str(time.time_ns()))
     paused = _signal_speech(signal.SIGTERM)
     config.log(
@@ -270,7 +257,7 @@ def pause():
 def resume():
     """Release the microphone turn so checkpointed speech can restart."""
     had_turn = config.MIC_TURN.exists()
-    config.MIC_TURN.unlink(missing_ok=True)
+    processes.clear(config.MIC_TURN)
     if not had_turn:
         return False
     config.log("microphone turn ended speech=released")
@@ -296,7 +283,7 @@ def drain():
     woke = False
     spoke = False
     interrupt = _interrupt_token()
-    config.DRAIN_PID.write_text(str(os.getpid()))
+    ownership = processes.claim(config.DRAIN_PID, os.getpid(), "drainer")
     try:
         while True:
             items = _pending()
@@ -363,11 +350,7 @@ def drain():
             except Exception as exc:
                 config.log(f"error: {exc}")
     finally:
-        try:
-            if config.DRAIN_PID.read_text().strip() == str(os.getpid()):
-                config.DRAIN_PID.unlink(missing_ok=True)
-        except OSError:
-            pass
+        processes.release(ownership)
         try:
             fcntl.flock(lock, fcntl.LOCK_UN)
             lock.close()
@@ -379,23 +362,18 @@ def stop():
     """Permanently discard current and queued speech."""
     config.STATE.mkdir(parents=True, exist_ok=True)
     config.INTERRUPT.write_text(str(time.time_ns()))
-    config.MIC_TURN.unlink(missing_ok=True)
+    processes.clear(config.MIC_TURN)
     for item in _pending():
         item.unlink(missing_ok=True)
-    try:
-        pids = config.PIDFILE.read_text().split()
-    except OSError:
-        pids = []
-    for pid in pids:
+    _signal_speech(signal.SIGTERM)
+    processes.clear(config.SPEECH_PID)
+    for pid in processes.owned_pids(config.CUE_PROCESSES, "cue"):
         try:
-            os.kill(int(pid), 15)
-        except (OSError, ValueError):
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
             pass
-    try:
-        config.PIDFILE.write_text("")
-    except OSError:
-        pass
-    config.SPEECH_PID.unlink(missing_ok=True)
+    # Never trust PID-only state written by older Parley versions.
+    config.PIDFILE.unlink(missing_ok=True)
 
 
 def skip():
@@ -403,7 +381,7 @@ def skip():
     config.STATE.mkdir(parents=True, exist_ok=True)
     config.private_write(config.SKIP, str(time.time_ns()))
     # A stop-talking utterance ends its provisional microphone reservation too.
-    config.MIC_TURN.unlink(missing_ok=True)
+    processes.clear(config.MIC_TURN)
     skipped = _signal_speech(signal.SIGTERM)
     config.log(
         f"speech block skip requested active={'yes' if skipped else 'no'}")

@@ -2,14 +2,18 @@ import wave
 
 import pytest
 
-from parley import config, cues
+from parley import config, cues, processes
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE", tmp_path)
     monkeypatch.setattr(config, "PIDFILE", tmp_path / "playing.pid")
+    monkeypatch.setattr(config, "CUE_PROCESSES", tmp_path / "cue-processes")
     monkeypatch.setattr(config, "LOG", tmp_path / "speak.log")
+    monkeypatch.setattr(
+        processes, "process_identity", lambda pid: f"test-birth:{pid}"
+    )
 
 
 @pytest.mark.parametrize("name", sorted(cues.PATTERNS))
@@ -135,6 +139,27 @@ def test_play_logs_semantic_cue_name_and_safe_source(monkeypatch):
     log = config.LOG.read_text()
     assert "cue wake source=bundled wait=true" in log
     assert "cue cancel source=generated wait=true" in log
+
+
+def test_completed_cue_releases_process_ownership(monkeypatch):
+    owned_while_playing = []
+
+    class Process:
+        pid = 4242
+
+        def wait(self, timeout=None):
+            owned_while_playing.extend(
+                processes.owned_pids(config.CUE_PROCESSES, "cue")
+            )
+            return 0
+
+    monkeypatch.setattr(cues.subprocess, "Popen", lambda *args, **kwargs: Process())
+
+    cues.play("wake")
+
+    assert owned_while_playing == [4242]
+    assert processes.owned_pids(config.CUE_PROCESSES, "cue") == []
+    assert not config.PIDFILE.exists()
 
 
 @pytest.mark.parametrize("name", ["wake", "send"])
