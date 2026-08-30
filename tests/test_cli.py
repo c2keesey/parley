@@ -1,5 +1,7 @@
 """Command-line behavior tests."""
 
+import pytest
+
 from parley import cli, listen, triggers
 
 
@@ -23,7 +25,6 @@ def _stub_enrollment(monkeypatch):
         "save",
         lambda samples: {"thresholds": {"wake": 0.42}},
     )
-    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
 
 
 def test_enroll_retargets_running_listener_to_invoking_pane(monkeypatch):
@@ -34,21 +35,20 @@ def test_enroll_retargets_running_listener_to_invoking_pane(monkeypatch):
     monkeypatch.setattr(listen, "get_target", lambda: "%511")
 
     stopped = []
-    targets = []
     launches = []
     monkeypatch.setattr(listen, "stop", lambda: stopped.append(True))
-    monkeypatch.setattr(listen, "set_target", targets.append)
     monkeypatch.setattr(
-        cli.subprocess,
-        "Popen",
-        lambda *args, **kwargs: launches.append((args, kwargs)),
+        listen,
+        "start",
+        lambda device, pane, executable: launches.append(
+            (device, pane, executable)),
     )
 
     cli.main(["enroll"])
 
     assert stopped == [True]
-    assert targets == ["%392"]
     assert len(launches) == 1
+    assert launches[0][:2] == ("0", "%392")
 
 
 def test_enroll_preserves_target_when_run_outside_tmux(monkeypatch):
@@ -58,13 +58,16 @@ def test_enroll_preserves_target_when_run_outside_tmux(monkeypatch):
     monkeypatch.setattr(listen, "get_target", lambda: "%511")
     monkeypatch.setattr(listen, "stop", lambda: None)
 
-    targets = []
-    monkeypatch.setattr(listen, "set_target", targets.append)
-    monkeypatch.setattr(cli.subprocess, "Popen", lambda *args, **kwargs: None)
+    starts = []
+    monkeypatch.setattr(
+        listen,
+        "start",
+        lambda device, pane, executable: starts.append((device, pane)),
+    )
 
     cli.main(["enroll"])
 
-    assert targets == ["%511"]
+    assert starts == [("0", "%511")]
 
 
 def test_enroll_does_not_start_listener_that_was_off(monkeypatch):
@@ -74,15 +77,75 @@ def test_enroll_does_not_start_listener_that_was_off(monkeypatch):
     monkeypatch.setattr(listen, "get_target", lambda: "%511")
     monkeypatch.setattr(
         listen,
-        "set_target",
-        lambda pane: (_ for _ in ()).throw(AssertionError("must not retarget")),
-    )
-    monkeypatch.setattr(
-        cli.subprocess,
-        "Popen",
+        "start",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("must not start listener")
         ),
     )
 
     cli.main(["enroll"])
+
+
+def test_listen_on_prints_success_only_after_verified_start(monkeypatch, capsys):
+    monkeypatch.setenv("TMUX_PANE", "%392")
+    starts = []
+    monkeypatch.setattr(
+        listen,
+        "start",
+        lambda device, pane, executable: starts.append((device, pane)),
+    )
+
+    cli.main(["listen", "on", "--device", "7"])
+
+    captured = capsys.readouterr()
+    assert starts == [("7", "%392")]
+    assert "listening: on" in captured.out
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("failure", [
+    "ffmpeg not found. Install it with: brew install ffmpeg",
+    (
+        "Microphone access was denied. Allow microphone access for your terminal "
+        "in System Settings > Privacy & Security > Microphone, then retry."
+    ),
+    "Microphone device '99' is unavailable. Set PARLEY_MIC to a valid input.",
+    "Listener exited before microphone capture was ready (exit code 23).",
+    (
+        "Listener PID 77 did not release the microphone within 4 seconds; "
+        "replacement was not started."
+    ),
+])
+def test_listen_on_failure_is_nonzero_and_never_claims_on(
+        failure, monkeypatch, capsys):
+    monkeypatch.setenv("TMUX_PANE", "%392")
+    monkeypatch.setattr(
+        listen,
+        "start",
+        lambda *args: (_ for _ in ()).throw(
+            listen.ListenerStartupError(failure)),
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["listen", "on", "--device", "99"])
+
+    captured = capsys.readouterr()
+    assert exited.value.code == 1
+    assert "listening: on" not in captured.out
+    assert failure in captured.err
+
+
+def test_internal_listener_run_receives_handshake_identity(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        listen,
+        "run",
+        lambda device, token, fd: calls.append((device, token, fd)),
+    )
+
+    cli.main([
+        "listen", "run", "--device", "7",
+        "--owner-token", "nonce", "--ready-fd", "42",
+    ])
+
+    assert calls == [("7", "nonce", 42)]
