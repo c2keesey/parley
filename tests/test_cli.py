@@ -1,6 +1,50 @@
 """Command-line behavior tests."""
 
-from parley import cli, listen, triggers
+from parley import cli, hooks, listen, triggers
+
+
+def test_preflight_routes_to_selected_harness(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hooks, "preflight", calls.append)
+
+    cli.main(["preflight", "--harness", "codex"])
+
+    assert calls == ["codex"]
+
+
+def test_update_dry_run_routes_without_mutation(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        hooks,
+        "install",
+        lambda harness, dry_run, operation: calls.append(
+            (harness, dry_run, operation)
+        ),
+    )
+
+    cli.main(["update", "--harness", "claude-code", "--dry-run"])
+
+    assert calls == [("claude-code", True, "update")]
+
+
+def test_uninstall_does_not_stop_or_clear_runtime(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        hooks,
+        "uninstall",
+        lambda harness, dry_run: calls.append((harness, dry_run)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "stop",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("uninstall must not mutate runtime state")
+        ),
+    )
+
+    cli.main(["uninstall", "--harness", "codex"])
+
+    assert calls == [("codex", False)]
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):

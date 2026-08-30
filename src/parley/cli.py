@@ -58,10 +58,18 @@ def build_parser():
     sub.add_parser("stop", help="drop the queue and stop playing")
     sub.add_parser("cues", help="regenerate the notification tones")
 
-    for name, help_text in [("install", "add the hook to your agent's settings"),
-                            ("uninstall", "remove the hook")]:
+    for name, help_text in [
+        ("preflight", "inspect install paths and prerequisites without changes"),
+        ("install", "install or repair agent integrations"),
+        ("update", "show and apply agent integration updates"),
+        ("uninstall", "remove only Parley-owned agent integrations"),
+    ]:
         command = sub.add_parser(name, help=help_text)
         command.add_argument("--harness", choices=sorted(hooks.TARGETS))
+        if name != "preflight":
+            command.add_argument(
+                "--dry-run", action="store_true", help="show exact changes only"
+            )
 
     sub.add_parser("hook", help="hook entry point (payload on stdin)")
     indicator = sub.add_parser("indicator", help=argparse.SUPPRESS)
@@ -89,13 +97,16 @@ def main(argv=None):
         print(text(args.pane or ""), end="")
         return
 
-    if command == "install":
-        hooks.install(args.harness)
+    if command == "preflight":
+        hooks.preflight(args.harness)
+        return
+
+    if command in ("install", "update"):
+        hooks.install(args.harness, args.dry_run, operation=command)
         return
 
     if command == "uninstall":
-        hooks.uninstall(args.harness)
-        stop()
+        hooks.uninstall(args.harness, args.dry_run)
         return
 
     if command == "cues":

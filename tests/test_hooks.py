@@ -1,4 +1,5 @@
 import json
+import stat
 from types import SimpleNamespace
 
 import pytest
@@ -144,6 +145,261 @@ def test_install_backs_up_before_writing():
     path.write_text(json.dumps({"hooks": {}}))
     hooks.install("codex")
     assert path.with_suffix(path.suffix + ".parley-backup").exists()
+
+
+def test_preflight_covers_both_harnesses_without_mutation(capsys):
+    plans = hooks.preflight()
+
+    assert [plan.name for plan in plans] == ["claude-code", "codex"]
+    output = capsys.readouterr().out
+    for name, settings in hooks.TARGETS.items():
+        skill = hooks.SKILL_DIRS[name] / "parley" / "SKILL.md"
+        assert str(settings) in output
+        assert str(settings.with_suffix(settings.suffix + ".parley-backup")) in output
+        assert str(skill) in output
+        assert str(skill.with_suffix(skill.suffix + ".parley-backup")) in output
+        assert not settings.exists()
+        assert not skill.exists()
+    assert "Prerequisites for hands-free input" in output
+
+
+def test_install_dry_run_reports_both_harnesses_without_mutation(capsys):
+    assert hooks.install(dry_run=True) == ["claude-code", "codex"]
+
+    assert "dry-run; no changes" in capsys.readouterr().out
+    assert all(not settings.exists() for settings in hooks.TARGETS.values())
+    assert all(
+        not (root / "parley" / "SKILL.md").exists()
+        for root in hooks.SKILL_DIRS.values()
+    )
+
+
+@pytest.mark.parametrize("harness", ["claude-code", "codex"])
+def test_new_install_files_have_deliberate_modes(harness):
+    hooks.install(harness)
+
+    settings = hooks.TARGETS[harness]
+    skill = hooks.SKILL_DIRS[harness] / "parley" / "SKILL.md"
+    assert stat.S_IMODE(settings.stat().st_mode) == 0o600
+    assert stat.S_IMODE(skill.stat().st_mode) == 0o644
+
+
+@pytest.mark.parametrize("harness", ["claude-code", "codex"])
+def test_install_preserves_unrelated_json_backups_and_modes(harness):
+    path = hooks.TARGETS[harness]
+    original = {
+        "theme": "midnight",
+        "hooks": {"Stop": [{"matcher": "", "hooks": [
+            {"type": "command", "command": "some-other-tool", "timeout": 3}
+        ]}]},
+    }
+    original_bytes = json.dumps(original).encode()
+    path.write_bytes(original_bytes)
+    path.chmod(0o640)
+    skill = hooks.SKILL_DIRS[harness] / "parley" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("old Parley skill\n")
+    skill.chmod(0o604)
+
+    assert hooks.install(harness) == [harness]
+
+    installed = json.loads(path.read_text())
+    assert installed["theme"] == "midnight"
+    assert installed["hooks"]["Stop"][0]["matcher"] == ""
+    assert any(
+        entry.get("command") == "some-other-tool"
+        for entry in installed["hooks"]["Stop"][0]["hooks"]
+    )
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+    backup = path.with_suffix(path.suffix + ".parley-backup")
+    assert backup.read_bytes() == original_bytes
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o640
+    assert stat.S_IMODE(skill.stat().st_mode) == 0o604
+    skill_backup = skill.with_suffix(skill.suffix + ".parley-backup")
+    assert skill_backup.read_text() == "old Parley skill\n"
+    assert stat.S_IMODE(skill_backup.stat().st_mode) == 0o604
+
+
+@pytest.mark.parametrize("harness", ["claude-code", "codex"])
+def test_install_update_uninstall_preserves_original_recovery_backup(harness):
+    path = hooks.TARGETS[harness]
+    original = b'{"unrelated":{"keep":"original"}}\n'
+    path.write_bytes(original)
+    path.chmod(0o640)
+
+    hooks.install(harness)
+    backup = path.with_suffix(path.suffix + ".parley-backup")
+    assert backup.read_bytes() == original
+
+    installed = json.loads(path.read_text())
+    installed["hooks"]["Stop"][0]["hooks"][-1]["timeout"] = 1
+    path.write_text(json.dumps(installed))
+    hooks.install(harness, operation="update")
+    assert backup.read_bytes() == original
+
+    hooks.uninstall(harness)
+
+    assert backup.read_bytes() == original
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o640
+    assert json.loads(path.read_text()) == {"unrelated": {"keep": "original"}}
+
+
+def test_invalid_json_in_one_harness_prevents_all_harness_mutation():
+    claude = hooks.TARGETS["claude-code"]
+    codex = hooks.TARGETS["codex"]
+    original = b'{"theme": "keep-me"}'
+    claude.write_bytes(original)
+    codex.write_text('{"hooks":')
+
+    with pytest.raises(SystemExit, match="no changes made"):
+        hooks.install()
+
+    assert claude.read_bytes() == original
+    assert not claude.with_suffix(".json.parley-backup").exists()
+    assert all(
+        not (root / "parley" / "SKILL.md").exists()
+        for root in hooks.SKILL_DIRS.values()
+    )
+
+
+@pytest.mark.parametrize("malformed", [
+    [],
+    {"hooks": None},
+    {"hooks": []},
+    {"hooks": {"Stop": None}},
+    {"hooks": {"Stop": {}}},
+    {"hooks": {"Stop": [{"hooks": None}]}},
+    {"hooks": {"Stop": [{"hooks": {}}]}},
+    {"hooks": {"Stop": [{"hooks": [{"command": 42}]}]}},
+])
+def test_structurally_malformed_settings_fail_without_mutation(malformed):
+    path = hooks.TARGETS["codex"]
+    original = json.dumps(malformed).encode()
+    path.write_bytes(original)
+
+    with pytest.raises(SystemExit, match="no changes made"):
+        hooks.install("codex")
+
+    assert path.read_bytes() == original
+    assert not path.with_suffix(".json.parley-backup").exists()
+    assert not (hooks.SKILL_DIRS["codex"] / "parley" / "SKILL.md").exists()
+
+
+def test_partial_install_with_hook_only_repairs_skill_without_rewriting_json():
+    path = hooks.TARGETS["claude-code"]
+    installed_hook = {
+        "hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": hooks.COMMAND,
+             "timeout": hooks.TIMEOUT}
+        ]}]}
+    }
+    original = json.dumps(installed_hook).encode()
+    path.write_bytes(original)
+
+    hooks.install("claude-code")
+
+    assert path.read_bytes() == original
+    assert not path.with_suffix(".json.parley-backup").exists()
+    assert (hooks.SKILL_DIRS["claude-code"] / "parley" / "SKILL.md").exists()
+
+
+def test_partial_install_with_skill_only_repairs_hook_without_rewriting_skill():
+    path = hooks.TARGETS["codex"]
+    path.write_text(json.dumps({"unrelated": True}))
+    skill = hooks.SKILL_DIRS["codex"] / "parley" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_bytes(hooks._skill_source().read_bytes())
+    skill.chmod(0o600)
+
+    hooks.install("codex")
+
+    assert json.loads(path.read_text())["unrelated"] is True
+    assert stat.S_IMODE(skill.stat().st_mode) == 0o600
+    assert not skill.with_suffix(".md.parley-backup").exists()
+
+
+def test_update_repairs_duplicate_and_stale_parley_hooks():
+    path = hooks.TARGETS["claude-code"]
+    stale = {"type": "command", "command": hooks.COMMAND, "timeout": 1}
+    path.write_text(json.dumps({"hooks": {"Stop": [
+        {"hooks": [stale]}, {"hooks": [stale.copy()]},
+    ]}}))
+
+    hooks.install("claude-code", operation="update")
+
+    parley_hooks = [
+        entry
+        for matcher in json.loads(path.read_text())["hooks"]["Stop"]
+        for entry in matcher.get("hooks", [])
+        if entry.get("command") == hooks.COMMAND
+    ]
+    assert parley_hooks == [{
+        "type": "command", "command": hooks.COMMAND, "timeout": hooks.TIMEOUT
+    }]
+
+
+def test_uninstall_removes_exact_owned_entries_and_leaves_runtime_data():
+    path = hooks.TARGETS["codex"]
+    path.write_text(json.dumps({
+        "unrelated": {"keep": True},
+        "hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": hooks.COMMAND,
+             "timeout": hooks.TIMEOUT},
+            {"type": "command", "command": "wrapper parley hook"},
+            {"type": "command", "command": "some-other-tool"},
+        ]}]},
+    }))
+    path.chmod(0o640)
+    skill = hooks.SKILL_DIRS["codex"] / "parley" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_bytes(hooks._skill_source().read_bytes())
+    runtime = config.STATE / "runtime-sentinel"
+    runtime.write_text("preserve me")
+
+    assert hooks.uninstall("codex") == ["codex"]
+
+    remaining = json.loads(path.read_text())
+    commands = remaining["hooks"]["Stop"][0]["hooks"]
+    assert [entry["command"] for entry in commands] == [
+        "wrapper parley hook", "some-other-tool"
+    ]
+    assert remaining["unrelated"] == {"keep": True}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+    assert not skill.exists()
+    assert runtime.read_text() == "preserve me"
+
+
+def test_uninstall_retains_a_modified_skill(capsys):
+    skill = hooks.SKILL_DIRS["claude-code"] / "parley" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("user-modified skill")
+
+    assert hooks.uninstall("claude-code") == []
+
+    assert skill.read_text() == "user-modified skill"
+    assert "retain modified file" in capsys.readouterr().out
+
+
+def test_uninstall_dry_run_does_not_remove_anything():
+    hooks.install("claude-code")
+    path = hooks.TARGETS["claude-code"]
+    skill = hooks.SKILL_DIRS["claude-code"] / "parley" / "SKILL.md"
+    original = path.read_bytes()
+
+    assert hooks.uninstall("claude-code", dry_run=True) == []
+
+    assert path.read_bytes() == original
+    assert skill.exists()
+
+
+def test_microphone_permission_guidance_is_macos_contextual(monkeypatch, capsys):
+    monkeypatch.setattr(hooks.platform, "system", lambda: "Darwin")
+
+    hooks.preflight("claude-code")
+
+    assert "System Settings > Privacy & Security > Microphone" in (
+        capsys.readouterr().out
+    )
 
 
 def test_hook_stays_silent_when_the_session_is_off(monkeypatch):
