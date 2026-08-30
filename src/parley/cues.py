@@ -109,6 +109,38 @@ def build(name):
     return path
 
 
+def _remove_pid_marker(pid):
+    """Remove this completed cue from legacy PID-only state."""
+    try:
+        entries = config.PIDFILE.read_text().split()
+    except OSError:
+        return
+    remaining = [entry for entry in entries if entry != str(pid)]
+    try:
+        if remaining:
+            config.private_write(config.PIDFILE, "\n".join(remaining) + "\n")
+        else:
+            config.PIDFILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _finish(proc):
+    """Reap a short cue and release its marker before the caller can exit."""
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.terminate()
+            proc.wait(timeout=1)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    except OSError:
+        pass
+    finally:
+        _remove_pid_marker(proc.pid)
+
+
 def play(name, wait=True):
     custom = override(name)
     shipped = bundled(name)
@@ -130,10 +162,7 @@ def play(name, wait=True):
     except OSError:
         pass
     if wait:
-        try:
-            proc.wait(timeout=5)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        _finish(proc)
 
 
 def rebuild():

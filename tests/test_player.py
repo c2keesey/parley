@@ -139,7 +139,7 @@ def test_provider_failure_is_sanitized_dropped_and_returns_failure(monkeypatch):
         "retry": "manual",
         "stage": "synthesis",
     }
-    assert chimed == [("error", False)]
+    assert chimed == [("error", True)]
     exposed = config.SPEECH_ERROR.read_text() + config.LOG.read_text()
     assert private_text not in exposed
     assert private_detail not in exposed
@@ -164,7 +164,7 @@ def test_entirely_failed_drain_attempts_each_block_once_and_indicates_once(
 
     assert player.drain() is False
     assert attempts == ["first block", "second block"]
-    assert chimed == [("error", False)]
+    assert chimed == [("error", True)]
     assert player._pending() == []
 
 
@@ -188,7 +188,40 @@ def test_nonzero_afplay_is_failure_and_never_emits_done(monkeypatch):
     assert player.drain() is False
 
     assert player.speech_error()["stage"] == "playback"
-    assert chimed == [("error", False)]
+    assert chimed == [("error", True)]
+
+
+def test_detached_failed_drain_has_no_error_cue_or_marker_at_return(
+        monkeypatch):
+    from parley import cues
+
+    wait_calls = []
+
+    class ErrorCueProcess:
+        pid = 4242
+        running = True
+
+        def wait(self, timeout=None):
+            wait_calls.append(timeout)
+            assert config.PIDFILE.read_text().split() == [str(self.pid)]
+            self.running = False
+            return 0
+
+    proc = ErrorCueProcess()
+    monkeypatch.setattr(
+        player, "synthesize",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    monkeypatch.setattr(cues.subprocess, "Popen", lambda *args, **kwargs: proc)
+    player.enqueue("synthetic failure block")
+
+    assert player.drain() is False
+
+    # detach() calls os._exit immediately after drain() returns. These exact
+    # boundary assertions ensure there is no child or marker for it to orphan.
+    assert wait_calls == [5]
+    assert not proc.running
+    assert not config.PIDFILE.exists()
 
 
 def test_invalid_macos_voice_is_a_sanitized_synthesis_failure(monkeypatch):
