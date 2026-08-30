@@ -73,6 +73,7 @@ private func makeSnapshot(
   targetAvailable: Bool = true
 ) -> ParleySnapshot {
   ParleySnapshot(
+    cliVersion: "0.5.4",
     contractVersion: 1,
     listenerRunning: running,
     listenerState: running ? "ready" : "off",

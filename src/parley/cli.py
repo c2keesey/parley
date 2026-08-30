@@ -36,6 +36,7 @@ def _status_snapshot():
     label = indicator.session_label(pane) if pane else ""
     listener_running = bool(listener.is_running())
     return {
+        "cli_version": __version__,
         "contract_version": 1,
         "listener_running": listener_running,
         "listener_state": (

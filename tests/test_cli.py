@@ -1,7 +1,7 @@
 """Command-line behavior tests."""
 import json
 
-from parley import cli, config, hooks, indicator, listen, triggers
+from parley import __version__, cli, config, hooks, indicator, listen, triggers
 
 
 def test_json_status_is_stable_and_does_not_discover_credentials(
@@ -23,6 +23,7 @@ def test_json_status_is_stable_and_does_not_discover_credentials(
     cli.main(["status", "--json"])
 
     assert json.loads(capsys.readouterr().out) == {
+        "cli_version": __version__,
         "contract_version": 1,
         "listener_running": True,
         "listener_state": "capturing",

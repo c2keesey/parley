@@ -17,6 +17,7 @@ public struct ParleyTarget: Codable, Equatable, Sendable {
 }
 
 public struct ParleySnapshot: Codable, Equatable, Sendable {
+  public let cliVersion: String
   public let contractVersion: Int
   public let listenerRunning: Bool
   public let listenerState: String
@@ -25,6 +26,7 @@ public struct ParleySnapshot: Codable, Equatable, Sendable {
   public let voiceOn: Bool
 
   public init(
+    cliVersion: String,
     contractVersion: Int,
     listenerRunning: Bool,
     listenerState: String,
@@ -32,6 +34,7 @@ public struct ParleySnapshot: Codable, Equatable, Sendable {
     target: ParleyTarget,
     voiceOn: Bool
   ) {
+    self.cliVersion = cliVersion
     self.contractVersion = contractVersion
     self.listenerRunning = listenerRunning
     self.listenerState = listenerState

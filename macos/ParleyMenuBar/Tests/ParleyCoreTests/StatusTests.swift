@@ -10,18 +10,19 @@ func runStatusTests() throws {
 
 private func testDecodesVersionedStatusContract() throws {
   let json =
-    #"{"contract_version":1,"listener_running":true,"listener_state":"ready","speaking":false,"target":{"available":true,"label":"ivory lynx","pane":"%531"},"voice_on":true}"#
+    #"{"cli_version":"0.5.4","contract_version":1,"listener_running":true,"listener_state":"ready","speaking":false,"target":{"available":true,"label":"ivory lynx","pane":"%531"},"voice_on":true}"#
 
   let status = try ParleySnapshot.decode(Data(json.utf8))
 
   try expect(status.contractVersion == 1, "contract version should decode")
+  try expect(status.cliVersion == "0.5.4", "CLI version should decode")
   try expect(status.target.displayName == "ivory lynx", "target should decode")
   try expect(status.voiceOn, "voice state should decode")
 }
 
 private func testRejectsUnknownContractVersion() throws {
   let json =
-    #"{"contract_version":2,"listener_running":false,"listener_state":"off","speaking":false,"target":{"available":false,"label":null,"pane":null},"voice_on":false}"#
+    #"{"cli_version":"0.5.4","contract_version":2,"listener_running":false,"listener_state":"off","speaking":false,"target":{"available":false,"label":null,"pane":null},"voice_on":false}"#
 
   do {
     _ = try ParleySnapshot.decode(Data(json.utf8))
@@ -72,6 +73,7 @@ private func snapshot(
   voiceOn: Bool = false
 ) -> ParleySnapshot {
   ParleySnapshot(
+    cliVersion: "0.5.4",
     contractVersion: 1,
     listenerRunning: running,
     listenerState: state,

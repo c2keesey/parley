@@ -48,6 +48,7 @@ struct StatusWindowView: View {
           value: model.snapshot?.listenerRunning == true ? "On" : "Off"
         )
         statusRow("CLI", value: model.cli.displayName)
+        statusRow("CLI version", value: model.snapshot?.cliVersion ?? "Unavailable")
         statusRow(
           "Last checked",
           value: model.lastUpdated?.formatted(date: .omitted, time: .standard)
