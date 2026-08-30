@@ -113,6 +113,7 @@ def build(name):
 
 
 def _finish(proc, ownership):
+    """Reap a short cue and release its marker before the caller can exit."""
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:

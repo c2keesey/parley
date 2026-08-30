@@ -92,7 +92,9 @@ def _record_speech_error(writer, provider, stage, indicate):
         from parley import cues
 
         try:
-            cues.play("error", wait=False)
+            # Detached drain exits with os._exit(), so the short cue must be
+            # reaped and its ownership released before this function returns.
+            cues.play("error")
         except Exception:
             # The persistent visual/status indication remains available when
             # local cue playback is itself unavailable.
