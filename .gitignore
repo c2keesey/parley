@@ -5,6 +5,11 @@ dist/
 build/
 *.egg-info/
 .pytest_cache/
+.artifacts/
+
+# Native macOS build products
+macos/ParleyMenuBar/.build/
+macos/ParleyMenuBar/.swiftpm/
 
 # Beads / Dolt local state
 .dolt/

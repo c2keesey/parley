@@ -105,6 +105,24 @@ Turning it on mid-session works without a restart: the confirmation it prints
 is the same instruction the startup hook injects, so it lands in the transcript
 as context.
 
+## Native menu bar (development)
+
+The native macOS companion is a small SwiftUI accessory app. It polls the
+credential-free `parley status --json` contract and sends controls back through
+the existing CLI, so the Python audio engine remains the only audio engine and
+the app never reads provider credentials.
+
+```sh
+swift run --package-path macos/ParleyMenuBar ParleyCoreTests
+macos/ParleyMenuBar/Scripts/build-app.sh
+open macos/ParleyMenuBar/.build/ParleyMenuBar.app
+```
+
+Set `PARLEY_CLI=/absolute/path/to/parley` when exercising a checkout whose CLI
+is not the currently installed `parley`. The menu clearly degrades when the CLI
+is absent, incompatible, or points at an unavailable tmux target; controls that
+cannot preserve a live target context remain disabled.
+
 ## Hands-free input
 
 Voice output alone still leaves you typing. `parley listen` closes the
