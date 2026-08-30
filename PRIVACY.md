@@ -9,13 +9,16 @@ Parley-operated backend.
 - Personalized trigger matching. Enrollment keeps raw recordings in memory and
   saves only normalized acoustic feature arrays under `~/.parley/triggers`.
 - Session routing, notification cues, and playback coordination.
-- Operational logs. Logs contain timestamps, cue names, provider errors,
-  timing, byte counts, and message lengths—not dictated or spoken message text.
+- Operational logs. Logs contain timestamps, cue names, sanitized provider and
+  failure-stage fields, timing, byte counts, and message lengths—not dictated
+  or spoken message text, provider response bodies, voice/model names, paths,
+  session labels, raw exceptions, credentials, or trigger feature values.
 - The versioned runtime status snapshot. It contains bounded operational states,
   queue depth, tmux pane id/availability, provider/fallback identity, process
-  ownership, and sanitized error codes. It never contains dictated or spoken
-  text, exception details, session labels, voice/model names, trigger features,
-  credentials, or filesystem paths.
+  ownership, retry/drop policy, and sanitized error codes. It never contains
+  dictated or spoken text, exception details, session labels, voice/model names,
+  trigger features, credentials, or filesystem paths. Speech failures use this
+  snapshot; there is no separate public error store.
 
 Before a wake phrase is accepted, short speech bursts may be processed by the
 local recognizer and are then discarded. Once capture begins, audio is held in
