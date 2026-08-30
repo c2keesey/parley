@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -58,9 +59,12 @@ def test_missing_tools_are_actionable_failures_and_warnings(monkeypatch):
     assert "brew install whisper-cpp" in checks["input.whisper"]["action"]
 
 
-def test_live_target_and_installed_hook_pass(monkeypatch):
+def test_verified_listener_and_live_target_pass_without_claiming_microphone(
+    monkeypatch,
+):
     (config.STATE / "listener.pid").write_text(str(os.getpid()))
     (config.STATE / "target").write_text("%42")
+    monkeypatch.setattr(doctor, "_listener_process", lambda path: "owned")
     monkeypatch.setattr(doctor, "_pane_available", lambda pane: pane == "%42")
     hooks.TARGETS["codex"].write_text(json.dumps({
         "hooks": {"Stop": [{"hooks": [{
@@ -72,7 +76,8 @@ def test_live_target_and_installed_hook_pass(monkeypatch):
 
     assert checks["listener.process"]["status"] == "pass"
     assert checks["listener.target"]["status"] == "pass"
-    assert checks["input.microphone"]["status"] == "pass"
+    assert checks["input.microphone"]["status"] == "warn"
+    assert "not safely verifiable" in checks["input.microphone"]["summary"]
     assert checks["hook.codex"]["status"] == "pass"
     assert checks["hook.claude-code"]["status"] == "warn"
 
@@ -80,6 +85,7 @@ def test_live_target_and_installed_hook_pass(monkeypatch):
 def test_running_listener_with_stale_target_fails(monkeypatch):
     (config.STATE / "listener.pid").write_text(str(os.getpid()))
     (config.STATE / "target").write_text("%stale")
+    monkeypatch.setattr(doctor, "_listener_process", lambda path: "owned")
     monkeypatch.setattr(doctor, "_pane_available", lambda pane: False)
 
     check = _checks(doctor.collect())["listener.target"]
@@ -87,6 +93,59 @@ def test_running_listener_with_stale_target_fails(monkeypatch):
     assert check["status"] == "fail"
     assert "listen off" in check["action"]
     assert "%stale" not in json.dumps(check)
+
+
+def test_unrelated_live_pid_is_not_a_parley_listener(monkeypatch):
+    marker = config.STATE / "listener.pid"
+    marker.write_text("4242")
+    monkeypatch.setattr(doctor.os, "kill", lambda pid, signal: None)
+    monkeypatch.setattr(
+        doctor.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=f"{os.getuid()} sleep 300\n",
+        ),
+    )
+
+    assert doctor._listener_process(marker) == "foreign"
+    checks = _checks(doctor.collect())
+    assert checks["listener.process"]["status"] == "fail"
+    assert "verified Parley listener" in checks["listener.process"]["summary"]
+    assert checks["input.microphone"]["status"] == "warn"
+
+
+def test_listener_process_requires_same_user_and_structured_command(monkeypatch):
+    marker = config.STATE / "listener.pid"
+    marker.write_text("4242")
+    monkeypatch.setattr(doctor.os, "kill", lambda pid, signal: None)
+
+    def process(command):
+        monkeypatch.setattr(
+            doctor.subprocess,
+            "run",
+            lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=command),
+        )
+        return doctor._listener_process(marker)
+
+    assert process(f"{os.getuid()} /opt/parley listen run --device 0\n") == "owned"
+    assert process(
+        f"{os.getuid()} /usr/bin/python3 /opt/parley listen run --device 0\n"
+    ) == "owned"
+    assert process(f"{os.getuid()} python -m parley listen run\n") == "owned"
+    assert process(f"{os.getuid() + 1} /opt/parley listen run\n") == "foreign"
+    assert process(f"{os.getuid()} sleep parley listen run\n") == "foreign"
+
+
+def test_tmux_target_must_resolve_to_requested_pane(monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/usr/bin/tmux")
+    monkeypatch.setattr(
+        doctor.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="%other\n"),
+    )
+
+    assert not doctor._pane_available("%requested")
 
 
 def test_hook_invalid_json_fails_without_echoing_contents():
@@ -106,6 +165,32 @@ def test_state_permissions_are_reported_without_mutation():
 
     assert check["status"] == "fail"
     assert stat.S_IMODE(config.STATE.stat().st_mode) == 0o755
+
+
+def test_sensitive_state_file_mode_is_a_failure_without_reading_content(
+    monkeypatch,
+):
+    sensitive = config.STATE / "speak.log"
+    sensitive.write_text("must never be read")
+    sensitive.chmod(0o666)
+    original_read_text = sensitive.__class__.read_text
+
+    def guarded_read_text(self, *args, **kwargs):
+        if self == sensitive:
+            pytest.fail("state content must not be read")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        sensitive.__class__,
+        "read_text",
+        guarded_read_text,
+    )
+
+    check = _checks(doctor.collect())["state.directory"]
+
+    assert check["status"] == "fail"
+    assert check["data"]["unsafe_entries"] == ["speak.log"]
+    assert stat.S_IMODE(sensitive.stat().st_mode) == 0o666
 
 
 def test_missing_state_is_reported_without_creating_it(tmp_path, monkeypatch):

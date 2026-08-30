@@ -3,14 +3,35 @@
 import json
 import os
 import platform
+import shlex
 import shutil
 import stat
 import subprocess
+from pathlib import Path
 
 from parley import config, hooks
 
 SCHEMA_VERSION = 1
 _RANK = {"pass": 0, "warn": 1, "fail": 2}
+_SENSITIVE_STATE_FILES = (
+    "default",
+    "drainer.pid",
+    "interrupt",
+    "listener.pid",
+    "listener.state",
+    "microphone-turn.pid",
+    "pause",
+    "player.lock",
+    "playing.pid",
+    "silence.mp3",
+    "skip",
+    "speak.log",
+    "speech.pid",
+    "target",
+    "tts-elevenlabs-fallback-until",
+    "tts-openai-fallback-until",
+)
+_SENSITIVE_STATE_DIRS = ("queue", "sessions", "spoken", "triggers")
 
 
 def _check(identifier, status, summary, action=None, data=None):
@@ -79,8 +100,43 @@ def _state_check():
             "state.directory", "fail", "state directory is visible to other users",
             "Restrict it to mode 700 (owner access only).", data,
         )
+    unsafe = []
+    existing = 0
+    expected = (
+        *((name, False) for name in _SENSITIVE_STATE_FILES),
+        *((name, True) for name in _SENSITIVE_STATE_DIRS),
+    )
+    for name, should_be_directory in expected:
+        entry = path / name
+        try:
+            metadata = entry.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            unsafe.append(name)
+            continue
+        existing += 1
+        correct_type = (
+            stat.S_ISDIR(metadata.st_mode)
+            if should_be_directory else stat.S_ISREG(metadata.st_mode)
+        )
+        private_mode = not stat.S_IMODE(metadata.st_mode) & 0o077
+        if not correct_type or not private_mode:
+            unsafe.append(name)
+    if unsafe:
+        data["unsafe_entries"] = unsafe
+        count = len(unsafe)
+        return _check(
+            "state.directory", "fail",
+            f"{count} known sensitive state entr{'y is' if count == 1 else 'ies are'} "
+            "not private regular files or directories",
+            "Restrict files to mode 600 and directories to mode 700; "
+            "replace any links or unexpected entry types.",
+            data,
+        )
     return _check(
-        "state.directory", "pass", "state directory is private and accessible",
+        "state.directory", "pass",
+        f"state directory and {existing} known sensitive entries are private",
         data=data,
     )
 
@@ -118,13 +174,54 @@ def _provider_check():
     return _check("provider.tts", "pass", summary)
 
 
-def _pid_alive(path):
+def _listener_process(path):
+    """Classify the PID marker without trusting liveness as ownership."""
+    if not path.exists():
+        return "absent"
     try:
         pid = int(path.read_text().strip())
         os.kill(pid, 0)
-        return True
     except (OSError, ValueError):
-        return False
+        return "stale"
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "uid=", "-o", "command="],
+            capture_output=True, text=True, timeout=2, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if result.returncode != 0 or not result.stdout.strip():
+        return "stale"
+    fields = result.stdout.strip().split(None, 1)
+    if len(fields) != 2:
+        return "unknown"
+    try:
+        uid = int(fields[0])
+        arguments = shlex.split(fields[1])
+    except (ValueError, TypeError):
+        return "unknown"
+    if uid != os.getuid():
+        return "foreign"
+    if not arguments:
+        return "unknown"
+    executable = Path(arguments[0]).name
+    direct = (
+        executable == "parley"
+        and arguments[1:3] == ["listen", "run"]
+    )
+    interpreted = (
+        executable.startswith("python")
+        and len(arguments) > 1
+        and Path(arguments[1]).name == "parley"
+        and arguments[2:4] == ["listen", "run"]
+    )
+    module = (
+        executable.startswith("python")
+        and arguments[1:5] == ["-m", "parley", "listen", "run"]
+    )
+    if direct or interpreted or module:
+        return "owned"
+    return "foreign"
 
 
 def _pane_available(pane):
@@ -133,23 +230,34 @@ def _pane_available(pane):
     try:
         result = subprocess.run(
             ["tmux", "display-message", "-p", "-t", pane, "#{pane_id}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=2, check=False,
+            capture_output=True, text=True, timeout=2, check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return False
-    return result.returncode == 0
+    return result.returncode == 0 and result.stdout.strip() == pane
 
 
 def _listener_checks():
     listener_pid = config.STATE / "listener.pid"
     target_path = config.STATE / "target"
-    running = _pid_alive(listener_pid)
-    process = _check(
-        "listener.process", "pass" if running else "warn",
-        "listener is running" if running else "listener is not running",
-        None if running else "Run `parley listen on` when hands-free input is wanted.",
-    )
+    process_state = _listener_process(listener_pid)
+    running = process_state == "owned"
+    marker_present = process_state != "absent"
+    if running:
+        process = _check(
+            "listener.process", "pass", "verified Parley listener is running",
+        )
+    elif marker_present:
+        process = _check(
+            "listener.process", "fail",
+            "listener PID marker does not identify a verified Parley listener",
+            "Run `parley listen off`, then `parley listen on` to replace it.",
+        )
+    else:
+        process = _check(
+            "listener.process", "warn", "listener is not running",
+            "Run `parley listen on` when hands-free input is wanted.",
+        )
     try:
         pane = target_path.read_text().strip()
     except OSError:
@@ -157,9 +265,10 @@ def _listener_checks():
     available = _pane_available(pane)
     if available:
         target = _check("listener.target", "pass", "listener target pane is available")
-    elif pane and running:
+    elif pane and marker_present:
         target = _check(
-            "listener.target", "fail", "running listener target is unavailable",
+            "listener.target", "fail",
+            "listener target is unavailable while a PID marker exists",
             "Run `parley listen off`, then `parley listen on` in the intended pane.",
         )
     elif pane:
@@ -173,11 +282,10 @@ def _listener_checks():
             "Run `parley listen on` from inside the intended tmux pane.",
         )
     microphone = _check(
-        "input.microphone", "pass" if running else "warn",
-        "active listener confirms microphone capture started" if running else
-        "microphone permission is verified only when the listener starts",
-        None if running else
-        "Allow microphone access for the terminal when `parley listen on` prompts.",
+        "input.microphone", "warn",
+        "microphone permission and active capture are not safely verifiable",
+        "Confirm the listener responds to the wake phrase; allow terminal "
+        "microphone access if macOS prompts.",
     )
     return [process, target, microphone]
 
