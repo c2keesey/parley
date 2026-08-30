@@ -36,6 +36,13 @@ Runtime state is stored under `~/.parley` by default and sensitive files are
 created with user-only permissions. The local whisper model is cached under
 `~/.cache/parley`.
 
+Non-secret customization is stored in `~/.parley/settings.json` with private
+permissions and atomic replacement. It may contain provider/model/voice names,
+control phrases, microphone choices, numeric tuning, and cue choices. Its
+schema cannot contain credentials, recordings, transcripts, operational logs,
+or personalized trigger profiles. API keys remain in the sources described
+below and are never copied into settings.
+
 Run `parley listen off`, then delete those two directories to remove local
 runtime state, logs, personalized trigger features, and the downloaded model.
 `parley uninstall` removes agent hooks; it intentionally leaves runtime state

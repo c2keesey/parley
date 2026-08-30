@@ -96,7 +96,7 @@ parley say "Tests are green, deploying now."
 parley say --voice nova "Heads up, that migration looks wrong."
 parley say --wait "..."   # block until spoken
 
-parley voices             # audition OpenAI voices, or list ElevenLabs voices
+parley voices             # provider-aware voice audition or listing
 parley stop               # drop the queue, silence everything
 parley default on         # new sessions start speaking
 ```
@@ -221,7 +221,38 @@ agnostic: it types into the session the same way you would.
 
 ## Configuration
 
-Every knob is an environment variable.
+Non-secret customization can be saved once and shared by the CLI and future
+native settings. Each effective value follows one explicit precedence rule:
+an environment variable in the current process wins over the persisted value,
+which wins over the built-in default.
+
+```sh
+parley config list                    # effective values and their sources
+parley config get speed
+parley config set speed 1.15
+parley config reset speed
+parley config reset --all             # also recovers a malformed settings file
+
+parley config discover providers
+parley config discover devices
+parley config discover voices --provider macos
+```
+
+Settings are validated before a private, atomic write to
+`$PARLEY_STATE/settings.json` (normally `~/.parley/settings.json`). Invalid
+updates leave the prior file untouched. API keys, passwords, tokens, and other
+credentials are not settings and the CLI refuses to store them. A running
+listener keeps the values it started with; restart it after changing listener
+settings.
+
+The persisted setting names are `provider`, `voice`, `model`,
+`openai-fallback-voice`, `elevenlabs-voice`, `elevenlabs-model`, `macos-voice`,
+`macos-rate`, `speed`, `wake`, `send`, `cancel`, `microphone`, `mic-threshold`,
+and `cue-wake`, `cue-send`, `cue-cancel`, `cue-stop`, and `cue-done`. A cue can
+be `default`, `off`, or an existing local audio file.
+
+Every setting remains environment-overrideable for compatibility and
+per-session experiments:
 
 | Variable | Default | Notes |
 |---|---|---|
