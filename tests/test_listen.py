@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from parley import listen, processes
+from parley import listen, processes, runtime
 from parley.listen import (
     contains_phrase,
     contains_wake,
@@ -18,12 +18,12 @@ from parley.listen import (
 
 @pytest.fixture(autouse=True)
 def isolate_microphone_turn(tmp_path, monkeypatch):
+    monkeypatch.setattr(listen.config, "STATE", tmp_path)
     monkeypatch.setattr(listen.player, "pause", lambda: False)
     monkeypatch.setattr(listen.player, "resume", lambda: False)
     monkeypatch.setattr(listen.player, "microphone_active", lambda: False)
     monkeypatch.setattr(listen.player, "output_playing", lambda: False)
     monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
-    monkeypatch.setattr(listen.config, "LISTENER_STATE", tmp_path / "listener.state")
     monkeypatch.setattr(
         listen.config, "CUE_PROCESSES", tmp_path / "cue-processes"
     )
@@ -32,10 +32,14 @@ def isolate_microphone_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(listen, "LISTEN_LOCK", tmp_path / "listener.lock")
     monkeypatch.setattr(listen, "TARGET", tmp_path / "target")
     monkeypatch.setattr(listen, "ffmpeg_bin", lambda: "/mock/ffmpeg")
+    monkeypatch.setattr(runtime, "_target_available", lambda pane: pane == "%42")
     listen.triggers.load.cache_clear()
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+    monkeypatch.setattr(listen, "_runtime_writer", None)
     monkeypatch.setattr(
-        processes, "process_identity", lambda pid: f"test-birth:{pid}"
+        processes,
+        "process_identity",
+        lambda pid: f"linux:00000000-0000-0000-0000-000000000000:{pid}",
     )
 
 
@@ -160,15 +164,14 @@ def test_short_chunk_is_not_an_error():
     assert rms(b"\x00") == 0
 
 
-def test_listener_state_is_persisted_and_refreshed(tmp_path, monkeypatch):
+def test_listener_state_is_published_and_refreshed(monkeypatch):
     refreshed = []
-    monkeypatch.setattr(listen.config, "LISTENER_STATE", tmp_path / "state")
     monkeypatch.setattr(listen.indicator, "refresh", lambda: refreshed.append(True))
-    monkeypatch.setattr(listen, "is_running", lambda: os.getpid())
+    monkeypatch.setattr(listen, "_runtime_writer", runtime.claim("listener"))
 
     listen.set_listener_state("capturing")
 
-    assert listen.listener_state() == "capturing"
+    assert runtime.snapshot()["listener"]["state"] == "capturing"
     assert refreshed == [True]
 
 
@@ -177,7 +180,6 @@ def test_reused_listener_pid_recovers_state_without_signaling(monkeypatch):
     monkeypatch.setattr(processes, "process_identity", births.get)
     ownership = processes.claim(listen.LISTEN_PID, 4242, "listener")
     assert ownership is not None
-    listen.config.LISTENER_STATE.write_text("capturing")
     births[4242] = "unrelated-reused-birth"
     killed = []
     monkeypatch.setattr(
@@ -189,7 +191,6 @@ def test_reused_listener_pid_recovers_state_without_signaling(monkeypatch):
 
     assert killed == []
     assert not listen.LISTEN_PID.exists()
-    assert not listen.config.LISTENER_STATE.exists()
 
 
 def test_submission_log_does_not_include_dictated_text(monkeypatch):
@@ -952,16 +953,19 @@ def test_start_succeeds_only_for_nonce_bound_live_capture(monkeypatch):
             "status": "ready",
             "pid": process.pid,
             "token": token,
-            "birth": f"test-birth:{process.pid}",
+            "birth": (
+                "linux:00000000-0000-0000-0000-000000000000:"
+                f"{process.pid}"
+            ),
             "message": "",
         }) + "\n").encode())
         return process
 
     monkeypatch.setattr(listen.subprocess, "Popen", launch)
 
-    assert listen.start("0", "%mock", "/mock/parley") == process.pid
+    assert listen.start("0", "%42", "/mock/parley") == process.pid
     assert commands[0][:3] == ["/mock/parley", "listen", "run"]
-    assert listen.get_target() == "%mock"
+    assert listen.get_target() == "%42"
 
 
 def test_start_rejects_early_child_crash_without_false_success(monkeypatch):
@@ -986,7 +990,10 @@ def test_start_rejects_wrong_nonce_and_pid_as_stale_readiness(monkeypatch):
             "status": "ready",
             "pid": process.pid + 1,
             "token": "stale-token",
-            "birth": f"test-birth:{process.pid + 1}",
+            "birth": (
+                "linux:00000000-0000-0000-0000-000000000000:"
+                f"{process.pid + 1}"
+            ),
             "message": "",
         }) + "\n").encode())
         return process

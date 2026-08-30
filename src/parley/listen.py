@@ -35,7 +35,7 @@ import time
 import wave
 from pathlib import Path
 
-from parley import config, cues, indicator, player, processes, triggers
+from parley import config, cues, indicator, player, processes, runtime, triggers
 
 RATE = 16000
 FRAME = 1024
@@ -78,6 +78,7 @@ LISTEN_LOCK = config.STATE / "listener.lock"
 STARTUP_TIMEOUT = 8.0
 SHUTDOWN_TIMEOUT = 4.0
 STARTUP_STABILITY = 0.1
+_runtime_writer = None
 
 
 class ListenerStartupError(RuntimeError):
@@ -388,7 +389,9 @@ def cue(kind):
 
 
 def set_target(pane):
-    config.private_write(TARGET, pane or "")
+    safe_pane = pane if isinstance(pane, str) and runtime.PANE.fullmatch(pane) else ""
+    config.private_write(TARGET, safe_pane)
+    runtime.manager_set_target(safe_pane)
 
 
 def get_target():
@@ -409,6 +412,13 @@ def inject(text):
     )
     if typed.returncode != 0:
         config.log(f"submission failed: could not type into {pane}")
+        if _runtime_writer is not None:
+            runtime.set_target(
+                _runtime_writer, pane, available=False)
+            runtime.record_error(
+                _runtime_writer,
+                "target_unavailable", "target", "submit",
+            )
         return False
     time.sleep(0.15)
     submitted = subprocess.run(
@@ -417,26 +427,28 @@ def inject(text):
     )
     if submitted.returncode != 0:
         config.log(f"submission failed: could not press Enter in {pane}")
+        if _runtime_writer is not None:
+            runtime.set_target(
+                _runtime_writer, pane, available=False)
+            runtime.record_error(
+                _runtime_writer,
+                "target_unavailable", "target", "submit",
+            )
         return False
     config.log(f"submitted to {pane} chars={len(text)}")
     return True
 
 
 def listener_state():
-    """Current listener state; an absent or invalid marker means ready."""
-    if not is_running():
-        config.LISTENER_STATE.unlink(missing_ok=True)
-        return "ready"
-    try:
-        state = config.LISTENER_STATE.read_text().strip()
-    except OSError:
-        return "ready"
+    """Current state from the single versioned runtime-status snapshot."""
+    state = runtime.snapshot()["listener"]["state"]
     return state if state in {"ready", "capturing", "sending"} else "ready"
 
 
 def set_listener_state(state):
-    """Persist and immediately display a listener state transition."""
-    config.private_write(config.LISTENER_STATE, state)
+    """Publish and immediately display a listener state transition."""
+    if _runtime_writer is not None:
+        runtime.set_listener(_runtime_writer, state)
     indicator.refresh()
 
 
@@ -601,7 +613,6 @@ def _claim_listener_lock():
         ) from exc
     return handle
 
-
 def _lock_is_held():
     config.private_directory(LISTEN_LOCK.parent)
     handle = open(LISTEN_LOCK, "a+")
@@ -639,6 +650,7 @@ def _send_startup(fd, status, token, birth="", message=""):
 
 def run(device="0", owner_token="", ready_fd=None):
     """The listening loop. Runs until killed."""
+    global _runtime_writer
     lock = None
     ownership = None
     startup_fd = ready_fd
@@ -669,6 +681,8 @@ def run(device="0", owner_token="", ready_fd=None):
         if ownership is None:
             raise ListenerStartupError(
                 "Listener process ownership could not be verified.")
+        _runtime_writer = runtime.claim("listener")
+        runtime.set_target(_runtime_writer, get_target())
         if not whisper_bin():
             raise ListenerStartupError(
                 "whisper-cli not found. Install it with: brew install whisper-cpp")
@@ -699,6 +713,10 @@ def run(device="0", owner_token="", ready_fd=None):
                     spoken = transcribe_cloud(frames)
                 except Exception:
                     config.log("transcription failed")
+                    runtime.record_error(
+                        _runtime_writer,
+                        "transcription_failed", "listener", "transcribe",
+                    )
                     return
                 message = strip_phrase(strip_wake_phrases(spoken), SEND)
                 config.log(f"message transcribed chars={len(message)}")
@@ -716,6 +734,7 @@ def run(device="0", owner_token="", ready_fd=None):
             # on every tmux status refresh, so a crash cannot leave a false ON.
             if now - last_indicator >= 5:
                 indicator.ensure()
+                runtime.heartbeat(_runtime_writer)
                 last_indicator = now
 
             if capturing:
@@ -859,7 +878,6 @@ def run(device="0", owner_token="", ready_fd=None):
         if startup_fd is not None:
             announce("error", "Listener exited before microphone capture was ready.")
         processes.release(ownership)
-        config.LISTENER_STATE.unlink(missing_ok=True)
         if lock is not None:
             try:
                 fcntl.flock(lock, fcntl.LOCK_UN)
@@ -868,6 +886,9 @@ def run(device="0", owner_token="", ready_fd=None):
                 pass
         if previous_sigterm is not None:
             signal.signal(signal.SIGTERM, previous_sigterm)
+        if _runtime_writer is not None:
+            runtime.release(_runtime_writer, state="off")
+            _runtime_writer = None
 
 
 def is_running():
@@ -882,7 +903,6 @@ def stop(timeout=SHUTDOWN_TIMEOUT):
                 "A listener owns the microphone, but its PID ownership record "
                 "is missing. Refusing to signal an unverified process."
             )
-        config.LISTENER_STATE.unlink(missing_ok=True)
         indicator.refresh()
         player.resume()
         return False
@@ -905,7 +925,7 @@ def stop(timeout=SHUTDOWN_TIMEOUT):
         time.sleep(0.05)
 
     processes.release(ownership)
-    config.LISTENER_STATE.unlink(missing_ok=True)
+    runtime.manager_listener_off()
     indicator.refresh()
     player.resume()
     return True

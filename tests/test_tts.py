@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from parley import config, tts
+from parley import config, runtime, tts
 
 
 class Response:
@@ -74,13 +74,19 @@ def test_auto_temporarily_uses_openai_after_elevenlabs_failure(monkeypatch):
         ) or b"backup audio",
     )
 
-    assert tts.synthesize(
-        "hello", "george-id", "eleven_v3", "elevenlabs"
-    ) == b"backup audio"
+    writer = runtime.claim("speech")
+    with runtime.writer_context(writer):
+        assert tts.synthesize(
+            "hello", "george-id", "eleven_v3", "elevenlabs"
+        ) == b"backup audio"
     assert fallback == [("hello", config.OPENAI_FALLBACK_VOICE, None)]
     assert config.tts_fallback_active()
     assert config.provider() == "openai"
     assert config.active_voice() == config.OPENAI_FALLBACK_VOICE
+    status = runtime.snapshot()
+    assert status["provider"]["active"] == "openai"
+    assert status["provider"]["fallback_from"] == "elevenlabs"
+    assert status["errors"][-1]["code"] == "provider_fallback"
 
 
 def test_macos_synthesis_is_local_and_keeps_text_out_of_argv(monkeypatch):

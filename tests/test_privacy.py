@@ -2,7 +2,7 @@ import os
 import stat
 from contextlib import contextmanager
 
-from parley import cli, config, cues, hooks, listen, player, processes
+from parley import cli, config, cues, hooks, listen, player, processes, runtime
 
 
 @contextmanager
@@ -31,7 +31,6 @@ def configure_state(tmp_path, monkeypatch):
         "PAUSE": state / "pause",
         "INTERRUPT": state / "interrupt",
         "SKIP": state / "skip",
-        "LISTENER_STATE": state / "listener.state",
         "LOG": state / "speak.log",
     }
     for name, path in paths.items():
@@ -91,6 +90,12 @@ def test_listener_logs_metadata_without_recognized_or_dictated_text(
 def test_listener_state_is_private_under_permissive_umask(tmp_path, monkeypatch):
     paths = configure_state(tmp_path, monkeypatch)
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+    monkeypatch.setattr(
+        processes,
+        "process_identity",
+        lambda pid: f"linux:00000000-0000-0000-0000-000000000000:{pid}",
+    )
+    monkeypatch.setattr(listen, "_runtime_writer", runtime.claim("listener"))
 
     with permissive_umask():
         listen.set_target("%0")
@@ -98,7 +103,8 @@ def test_listener_state_is_private_under_permissive_umask(tmp_path, monkeypatch)
 
     assert mode(paths["STATE"]) == 0o700
     assert mode(listen.TARGET) == 0o600
-    assert mode(paths["LISTENER_STATE"]) == 0o600
+    assert mode(paths["STATE"] / "runtime-status.json") == 0o600
+    assert mode(paths["STATE"] / "runtime-status.lock") == 0o600
 
 
 def test_hook_state_is_private_under_permissive_umask(tmp_path, monkeypatch):

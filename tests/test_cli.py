@@ -1,14 +1,78 @@
 """Command-line behavior tests."""
 
+import json
+
 import pytest
 
-from parley import cli, listen, triggers
+from parley import cli, config, listen, triggers
+
+
+def test_status_consumes_one_runtime_snapshot(monkeypatch, capsys):
+    snapshots = []
+    value = {
+        "health": "degraded",
+        "generation": 17,
+        "listener": {"state": "degraded"},
+        "queue": {"depth": 2},
+        "speech": {"synthesis": "degraded", "playback": "idle"},
+        "target": {"id": "%42", "available": False},
+        "provider": {
+            "configured": "auto",
+            "active": "macos",
+            "fallback": True,
+            "fallback_from": "elevenlabs",
+        },
+        "errors": [{
+            "code": "synthesis_failed",
+            "component": "speech",
+            "stage": "synthesize",
+            "at": 1,
+        }],
+    }
+    monkeypatch.setattr(
+        cli.runtime, "snapshot", lambda: snapshots.append(True) or value)
+    monkeypatch.setattr(cli.hooks, "session_keys", lambda: ["test"])
+    monkeypatch.setattr(cli.hooks, "is_on", lambda keys: False)
+
+    cli.main(["status"])
+
+    output = capsys.readouterr().out
+    assert snapshots == [True]
+    assert "runtime: degraded generation=17 provider=auto -> macos" in output
+    assert "speech synthesis=degraded playback=idle queue=2" in output
+    assert "target %42 (unavailable)" in output
+    assert "fallback elevenlabs -> macos" in output
+    assert "recent error synthesis_failed (speech/synthesize)" in output
+
+
+def test_status_replaces_corrupt_private_fields_instead_of_printing_them(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "STATE", tmp_path)
+    monkeypatch.setattr(cli.hooks, "session_keys", lambda: ["test"])
+    monkeypatch.setattr(cli.hooks, "is_on", lambda keys: False)
+    snapshot = cli.runtime.snapshot()
+    snapshot["errors"] = [{"detail": "private dictated text sk-secret"}]
+    config.private_write(
+        tmp_path / "runtime-status.json", json.dumps(snapshot))
+
+    cli.main(["status"])
+
+    output = capsys.readouterr().out
+    assert "private dictated text" not in output
+    assert "sk-secret" not in output
+    assert "recent error snapshot_invalid (runtime/status)" in output
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
-    monkeypatch.setattr(listen, "is_running", lambda: 123)
-    monkeypatch.setattr(listen, "get_target", lambda: "%531")
-    monkeypatch.setattr(listen, "listener_state", lambda: "ready")
+    monkeypatch.setattr(
+        cli.runtime,
+        "snapshot",
+        lambda: {
+            "listener": {"state": "ready"},
+            "writers": {"listener": {"pid": 123}},
+            "target": {"id": "%531", "available": True},
+        },
+    )
     monkeypatch.setattr(listen.triggers, "enrolled", lambda: True)
     monkeypatch.setattr(
         listen.indicator, "session_label", lambda pane: "ivory-lynx")

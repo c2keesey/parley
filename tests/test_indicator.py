@@ -3,15 +3,25 @@ import shutil
 import subprocess
 from types import SimpleNamespace
 
-from parley import hooks, indicator, listen
+from parley import hooks, indicator, runtime
 
 
 def result(stdout="", returncode=0):
     return SimpleNamespace(stdout=stdout, returncode=returncode)
 
 
+def status(listener="ready", pane="%42", queue=0, synthesis="idle",
+           playback="idle", available=True):
+    return {
+        "listener": {"state": listener},
+        "target": {"id": pane, "available": available},
+        "queue": {"depth": queue},
+        "speech": {"synthesis": synthesis, "playback": playback},
+    }
+
+
 def test_indicator_is_blank_when_listener_is_not_alive(monkeypatch):
-    monkeypatch.setattr(listen, "is_running", lambda: 0)
+    monkeypatch.setattr(runtime, "snapshot", lambda: status(listener="off"))
     monkeypatch.setattr(
         indicator, "_session",
         lambda pane: (_ for _ in ()).throw(AssertionError("must not resolve")),
@@ -20,19 +30,13 @@ def test_indicator_is_blank_when_listener_is_not_alive(monkeypatch):
 
 
 def test_indicator_names_the_dictation_target(monkeypatch):
-    monkeypatch.setattr(listen, "is_running", lambda: 123)
-    monkeypatch.setattr(listen, "get_target", lambda: "%42")
-    monkeypatch.setattr(listen, "listener_state", lambda: "ready")
-    monkeypatch.setattr(listen, "speaking", lambda: False)
+    monkeypatch.setattr(runtime, "snapshot", status)
     monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
     assert indicator.text() == " 🎙 PARLEY READY · SENDS TO windy-falcon "
 
 
 def test_indicator_makes_current_and_wrong_session_unmistakable(monkeypatch):
-    monkeypatch.setattr(listen, "is_running", lambda: 123)
-    monkeypatch.setattr(listen, "get_target", lambda: "%42")
-    monkeypatch.setattr(listen, "listener_state", lambda: "ready")
-    monkeypatch.setattr(listen, "speaking", lambda: False)
+    monkeypatch.setattr(runtime, "snapshot", status)
     monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
     monkeypatch.setattr(hooks, "pane_is_on", lambda pane: True)
 
@@ -43,7 +47,7 @@ def test_indicator_makes_current_and_wrong_session_unmistakable(monkeypatch):
 
 
 def test_indicator_is_blank_when_active_pane_has_parley_off(monkeypatch):
-    monkeypatch.setattr(listen, "is_running", lambda: 123)
+    monkeypatch.setattr(runtime, "snapshot", status)
     monkeypatch.setattr(hooks, "pane_is_on", lambda pane: False)
     monkeypatch.setattr(
         indicator, "_session",
@@ -73,10 +77,8 @@ def test_real_tmux_sessions_surface_a_stale_target(monkeypatch):
         ).stdout.strip()
         monkeypatch.setattr(
             indicator, "_run", lambda argv, timeout=2: tmux(*argv[1:]))
-        monkeypatch.setattr(listen, "is_running", lambda: 123)
-        monkeypatch.setattr(listen, "get_target", lambda: target_pane)
-        monkeypatch.setattr(listen, "listener_state", lambda: "ready")
-        monkeypatch.setattr(listen, "speaking", lambda: False)
+        monkeypatch.setattr(
+            runtime, "snapshot", lambda: status(pane=target_pane))
         monkeypatch.setattr(hooks, "pane_is_on", lambda pane: True)
 
         assert indicator.text(target_pane) == (
@@ -104,17 +106,14 @@ def test_real_tmux_sessions_surface_a_stale_target(monkeypatch):
 
 
 def test_indicator_distinguishes_capture_send_and_speech(monkeypatch):
-    monkeypatch.setattr(listen, "is_running", lambda: 123)
-    monkeypatch.setattr(listen, "get_target", lambda: "%42")
     monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
-    monkeypatch.setattr(listen, "speaking", lambda: False)
-
-    monkeypatch.setattr(listen, "listener_state", lambda: "capturing")
+    current = status(listener="capturing")
+    monkeypatch.setattr(runtime, "snapshot", lambda: current)
     assert indicator.text() == " 🔴 PARLEY LISTENING · SENDS TO windy-falcon "
-    monkeypatch.setattr(listen, "listener_state", lambda: "sending")
+    current["listener"]["state"] = "sending"
     assert indicator.text() == " ⏳ PARLEY SENDING · SENDS TO windy-falcon "
-    monkeypatch.setattr(listen, "listener_state", lambda: "ready")
-    monkeypatch.setattr(listen, "speaking", lambda: True)
+    current["listener"]["state"] = "ready"
+    current["speech"]["playback"] = "active"
     assert indicator.text() == (
         " 🔊 PARLEY SPEAKING · MIC READY · SENDS TO windy-falcon "
     )

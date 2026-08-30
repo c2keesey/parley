@@ -26,7 +26,6 @@ LOG = STATE / "speak.log"
 SILENCE = STATE / "silence.mp3"
 INTERRUPT = STATE / "interrupt"
 SKIP = STATE / "skip"
-LISTENER_STATE = STATE / "listener.state"
 TRIGGERS = STATE / "triggers"
 
 PROMPT = (
