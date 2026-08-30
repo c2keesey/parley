@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from parley import config, indicator, player
+from parley import config, indicator, player, processes
 
 
 @pytest.fixture(autouse=True)
@@ -14,6 +14,7 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "QUEUE", tmp_path / "queue")
     monkeypatch.setattr(config, "LOCK", tmp_path / "player.lock")
     monkeypatch.setattr(config, "PIDFILE", tmp_path / "playing.pid")
+    monkeypatch.setattr(config, "CUE_PROCESSES", tmp_path / "cue-processes")
     monkeypatch.setattr(config, "SPEECH_PID", tmp_path / "speech.pid")
     monkeypatch.setattr(config, "DRAIN_PID", tmp_path / "drainer.pid")
     monkeypatch.setattr(config, "MIC_TURN", tmp_path / "microphone-turn.pid")
@@ -22,6 +23,15 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "INTERRUPT", tmp_path / "interrupt")
     monkeypatch.setattr(config, "SKIP", tmp_path / "skip")
     monkeypatch.setattr(indicator, "refresh", lambda: None)
+    monkeypatch.setattr(
+        processes, "process_identity", lambda pid: f"test-birth:{pid}"
+    )
+
+
+def own(path, pid, kind):
+    ownership = processes.claim(path, pid, kind)
+    assert ownership is not None
+    return ownership
 
 
 @pytest.fixture
@@ -166,7 +176,7 @@ def test_stop_clears_the_queue(monkeypatch):
 
 def test_skip_current_preserves_queue_and_global_interrupt(monkeypatch):
     killed = []
-    config.SPEECH_PID.write_text("4242")
+    own(config.SPEECH_PID, 4242, "speech")
     monkeypatch.setattr(
         player.os, "kill", lambda pid, sig: killed.append((pid, sig)))
     player.enqueue("current response")
@@ -266,15 +276,62 @@ def test_interrupting_playback_suppresses_the_done_chime(monkeypatch):
 
 def test_stop_terminates_the_active_audio_process(monkeypatch):
     killed = []
-    config.PIDFILE.write_text("4242\n")
-    config.SPEECH_PID.write_text("4242")
+    own(config.SPEECH_PID, 4242, "speech")
     monkeypatch.setattr(player.os, "kill", lambda pid, signal: killed.append(
         (pid, signal)))
 
     player.stop()
 
     assert killed == [(4242, 15)]
-    assert config.PIDFILE.read_text() == ""
+
+
+def test_stop_never_signals_historical_pidfile_entries(monkeypatch):
+    """A PID reused after natural completion must never become a signal target."""
+    config.PIDFILE.write_text("41001\n41002\n")
+    killed = []
+    monkeypatch.setattr(
+        player.os, "kill", lambda pid, signal: killed.append((pid, signal))
+    )
+
+    player.stop()
+
+    assert killed == []
+    assert not config.PIDFILE.exists()
+
+
+def test_reused_speech_pid_is_recovered_without_a_signal(monkeypatch):
+    births = {4242: "original-birth"}
+    monkeypatch.setattr(processes, "process_identity", births.get)
+    own(config.SPEECH_PID, 4242, "speech")
+    births[4242] = "unrelated-reused-birth"
+    killed = []
+    monkeypatch.setattr(
+        player.os, "kill", lambda pid, signal: killed.append((pid, signal))
+    )
+
+    assert not player.skip()
+
+    assert killed == []
+    assert not config.SPEECH_PID.exists()
+
+
+def test_naturally_completed_playback_releases_ownership(monkeypatch):
+    seen_while_running = []
+
+    class Process:
+        pid = 4242
+
+        def wait(self):
+            seen_while_running.append(player.output_playing())
+            return 0
+
+    monkeypatch.setattr(player.subprocess, "Popen", lambda *args, **kwargs: Process())
+
+    assert player.play(b"audio")
+
+    assert seen_while_running == [True]
+    assert not config.SPEECH_PID.exists()
+    assert not config.PIDFILE.exists()
 
 
 def test_drainer_is_active_during_synthesis_and_clears_marker(monkeypatch):
@@ -375,7 +432,7 @@ def test_interrupt_in_audio_launch_window_terminates_new_process(monkeypatch):
 
 def test_pause_preserves_queue_and_resume_keeps_interrupt_token(monkeypatch):
     signals = []
-    config.SPEECH_PID.write_text("4242")
+    own(config.SPEECH_PID, 4242, "speech")
     monkeypatch.setattr(
         player.os, "kill", lambda pid, sig: signals.append((pid, sig)))
     player.enqueue("current response")
@@ -425,8 +482,7 @@ def test_new_speech_waits_for_exclusive_microphone_turn(monkeypatch):
 
 def test_explicit_stop_discards_paused_and_queued_speech(monkeypatch):
     killed = []
-    config.SPEECH_PID.write_text("4242")
-    config.PIDFILE.write_text("4242\n")
+    own(config.SPEECH_PID, 4242, "speech")
     monkeypatch.setattr(
         player.os, "kill", lambda pid, sig: killed.append((pid, sig)))
     player.pause()
@@ -450,7 +506,7 @@ def test_microphone_turn_opening_during_audio_launch_restarts_new_process(
             self.terminated = False
             launched.append(self)
             if len(launched) == 1:
-                config.MIC_TURN.write_text(str(os.getpid()))
+                own(config.MIC_TURN, os.getpid(), "microphone-turn")
 
         def terminate(self):
             self.terminated = True
@@ -549,8 +605,10 @@ def test_natural_completion_during_pause_race_is_not_replayed(monkeypatch):
 
 def test_stale_microphone_turn_recovers_paused_speech(monkeypatch):
     signals = []
-    config.MIC_TURN.write_text("99999")
-    config.SPEECH_PID.write_text("4242")
+    births = {99999: "original-birth"}
+    monkeypatch.setattr(processes, "process_identity", births.get)
+    own(config.MIC_TURN, 99999, "microphone-turn")
+    births[99999] = "unrelated-reused-birth"
 
     def kill(pid, sig):
         if pid == 99999 and sig == 0:
@@ -562,3 +620,13 @@ def test_stale_microphone_turn_recovers_paused_speech(monkeypatch):
     assert not player.microphone_active()
     assert not config.MIC_TURN.exists()
     assert signals == []
+
+
+def test_stale_drainer_marker_does_not_report_active(monkeypatch):
+    births = {7777: "original-birth"}
+    monkeypatch.setattr(processes, "process_identity", births.get)
+    own(config.DRAIN_PID, 7777, "drainer")
+    births[7777] = "unrelated-reused-birth"
+
+    assert not player.active()
+    assert not config.DRAIN_PID.exists()

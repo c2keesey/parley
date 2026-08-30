@@ -30,7 +30,7 @@ import time
 import wave
 from pathlib import Path
 
-from parley import config, cues, indicator, player, triggers
+from parley import config, cues, indicator, player, processes, triggers
 
 RATE = 16000
 FRAME = 1024
@@ -353,17 +353,7 @@ def speaking():
         return False
     if player.active():
         return True
-    try:
-        pids = config.PIDFILE.read_text().split()
-    except OSError:
-        return False
-    for pid in pids:
-        try:
-            os.kill(int(pid), 0)
-            return True
-        except (OSError, ValueError):
-            continue
-    return False
+    return bool(processes.owned_pids(config.CUE_PROCESSES, "cue"))
 
 
 def cue(kind):
@@ -408,6 +398,9 @@ def inject(text):
 
 def listener_state():
     """Current listener state; an absent or invalid marker means ready."""
+    if not is_running():
+        config.LISTENER_STATE.unlink(missing_ok=True)
+        return "ready"
     try:
         state = config.LISTENER_STATE.read_text().strip()
     except OSError:
@@ -508,7 +501,7 @@ def run(device="0"):
     if not ensure_model():
         raise SystemExit("could not download the wake-word model")
 
-    config.private_write(LISTEN_PID, str(os.getpid()))
+    ownership = processes.claim(LISTEN_PID, os.getpid(), "listener")
     set_listener_state("ready")
     config.log(f"listener started device={device}")
     personalized_active = triggers.enrolled()
@@ -671,17 +664,12 @@ def run(device="0"):
         # classification failed or the listener exited between yield/handling.
         if capturing or player.microphone_active():
             player.resume()
-        LISTEN_PID.unlink(missing_ok=True)
+        processes.release(ownership)
         config.LISTENER_STATE.unlink(missing_ok=True)
 
 
 def is_running():
-    try:
-        pid = int(LISTEN_PID.read_text().strip())
-        os.kill(pid, 0)
-        return pid
-    except (OSError, ValueError):
-        return 0
+    return processes.owned_pid(LISTEN_PID, "listener")
 
 
 def stop():
@@ -691,7 +679,7 @@ def stop():
             os.kill(pid, 15)
         except OSError:
             pass
-    LISTEN_PID.unlink(missing_ok=True)
+    processes.clear(LISTEN_PID)
     config.LISTENER_STATE.unlink(missing_ok=True)
     indicator.refresh()
     player.resume()
