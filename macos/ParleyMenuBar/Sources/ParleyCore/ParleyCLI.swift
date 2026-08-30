@@ -127,9 +127,12 @@ public actor ParleyCLIClient {
     let output = standardOutput.fileHandleForReading.readDataToEndOfFile()
     let errorData = standardError.fileHandleForReading.readDataToEndOfFile()
     guard process.terminationStatus == 0 else {
-      let message =
+      let rawMessage =
         String(data: errorData, encoding: .utf8)?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let message =
+        rawMessage.split(whereSeparator: \.isNewline).last.map(String.init)
+        ?? rawMessage
       return .failure(.failed(process.terminationStatus, message))
     }
     return .success(output)
