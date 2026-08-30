@@ -88,6 +88,7 @@ resuming the unspoken remainder after you interrupt a reply.
 ## Use
 
 ```sh
+parley                    # show commands and suggested next steps
 parley on                 # speak replies in this session
 parley off                # stop
 parley status

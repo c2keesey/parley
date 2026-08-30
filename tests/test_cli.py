@@ -1,6 +1,71 @@
 """Command-line behavior tests."""
 
+import io
+
 from parley import cli, listen, triggers
+
+
+class _UnreadableInput:
+    def __init__(self, *, tty):
+        self.tty = tty
+
+    def isatty(self):
+        return self.tty
+
+    def read(self, *args, **kwargs):
+        raise AssertionError("bare parley must not read stdin")
+
+
+def test_bare_invocation_prints_guidance_without_reading_tty(monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "stdin", _UnreadableInput(tty=True))
+
+    cli.main([])
+
+    output = capsys.readouterr().out
+    assert "usage: parley" in output
+    assert "parley status" in output
+    assert "parley on" in output
+
+
+def test_bare_invocation_does_not_consume_piped_input(monkeypatch, capsys):
+    piped = io.StringIO("arbitrary non-hook input\n")
+    monkeypatch.setattr(cli.sys, "stdin", piped)
+
+    cli.main([])
+
+    assert piped.tell() == 0
+    assert "usage: parley" in capsys.readouterr().out
+
+
+def test_explicit_hook_still_reads_piped_json(monkeypatch):
+    payload = '{"session_id": "compatibility-test"}\n'
+    piped = io.StringIO(payload)
+    monkeypatch.setattr(cli.sys, "stdin", piped)
+    monkeypatch.setattr(cli.hooks, "is_on", lambda keys: False)
+
+    cli.main(["hook"])
+
+    assert piped.tell() == len(payload)
+
+
+def test_bare_json_argument_still_dispatches_without_reading_stdin(
+    monkeypatch,
+):
+    payload = '{"session_id": "compatibility-test"}'
+    handled = []
+    original_handle = cli.hooks.handle
+
+    def record_handle(*, argv):
+        handled.append(argv)
+        original_handle(argv=argv)
+
+    monkeypatch.setattr(cli.sys, "stdin", _UnreadableInput(tty=False))
+    monkeypatch.setattr(cli.hooks, "is_on", lambda keys: False)
+    monkeypatch.setattr(cli.hooks, "handle", record_handle)
+
+    cli.main([payload])
+
+    assert handled == [[payload]]
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):

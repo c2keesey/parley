@@ -23,7 +23,12 @@ def _report(keys):
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="parley",
-        description="Two-way voice for terminal coding agents.")
+        description="Two-way voice for terminal coding agents.",
+        epilog=(
+            "Start with 'parley status' to inspect this session, or "
+            "'parley on' to enable voice."
+        ),
+    )
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command")
 
@@ -76,8 +81,13 @@ def main(argv=None):
         hooks.handle(argv=argv)
         return
 
-    args = build_parser().parse_args(argv)
-    command = args.command or "hook"
+    parser = build_parser()
+    if not argv:
+        parser.print_help()
+        return
+
+    args = parser.parse_args(argv)
+    command = args.command
 
     if command == "hook":
         hooks.handle(argv=argv)
