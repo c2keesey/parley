@@ -155,6 +155,15 @@ def _decode_state(value):
         return None
     if state["version"] != STATE_VERSION:
         return None
+    if not isinstance(state["status_right"], str):
+        return None
+    if not all(isinstance(state[key], bool) for key in (
+            "status_right_local", "status_right_length_local",
+            "length_changed")):
+        return None
+    if (not isinstance(state["status_right_length"], int)
+            or isinstance(state["status_right_length"], bool)):
+        return None
     return state
 
 
@@ -236,8 +245,9 @@ def _remove(session):
             restored = _unset_option(session, "status-right-length")
         changed = max(changed, int(restored))
 
-    if state:
-        _unset_option(session, STATE_OPTION)
+    # The namespace is Parley-owned even if an interrupted write left an
+    # unreadable value, so cleanup may always discard it.
+    _unset_option(session, STATE_OPTION)
     return changed
 
 

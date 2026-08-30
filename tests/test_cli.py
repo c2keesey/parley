@@ -1,6 +1,6 @@
 """Command-line behavior tests."""
 
-from parley import cli, listen, triggers
+from parley import cli, hooks, indicator, listen, triggers
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
@@ -86,3 +86,39 @@ def test_enroll_does_not_start_listener_that_was_off(monkeypatch):
     )
 
     cli.main(["enroll"])
+
+
+def test_on_and_off_reconcile_the_indicator_after_session_state(monkeypatch):
+    actions = []
+    monkeypatch.setattr(hooks, "session_keys", lambda: ["pane-_42"])
+    monkeypatch.setattr(
+        hooks, "turn_on", lambda keys: actions.append(("on", tuple(keys))))
+    monkeypatch.setattr(
+        hooks, "turn_off", lambda keys: actions.append(("off", tuple(keys))))
+    monkeypatch.setattr(cli, "stop", lambda: actions.append(("stop",)))
+    monkeypatch.setattr(
+        indicator, "ensure", lambda: actions.append(("indicator",)))
+    monkeypatch.setattr(cli, "_report", lambda keys: None)
+
+    cli.main(["on"])
+    cli.main(["off"])
+
+    assert actions == [
+        ("on", ("pane-_42",)),
+        ("indicator",),
+        ("off", ("pane-_42",)),
+        ("stop",),
+        ("indicator",),
+    ]
+
+
+def test_uninstall_stops_listener_and_cleans_its_indicator(monkeypatch):
+    actions = []
+    monkeypatch.setattr(
+        hooks, "uninstall", lambda harness: actions.append(("hooks", harness)))
+    monkeypatch.setattr(listen, "stop", lambda: actions.append(("listener",)))
+    monkeypatch.setattr(cli, "stop", lambda: actions.append(("player",)))
+
+    cli.main(["uninstall", "--harness", "codex"])
+
+    assert actions == [("hooks", "codex"), ("listener",), ("player",)]

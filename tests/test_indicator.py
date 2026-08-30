@@ -239,3 +239,22 @@ def test_cleanup_restores_inherited_options_without_freezing_them(isolated_tmux)
         tmux, "inherited", "status-right-length", local=True)
     assert _tmux_option(tmux, "inherited", "status-right") == "GLOBAL-AFTER"
     assert _tmux_option(tmux, "inherited", "status-right-length") == "55"
+
+
+def test_reconcile_removes_legacy_fragment_without_guessing_length(isolated_tmux):
+    tmux = isolated_tmux
+    assert tmux("new-session", "-d", "-s", "legacy").returncode == 0
+    custom = "LEGACY-CUSTOM #[fg=cyan]preserve"
+    legacy_badge = (
+        f"{indicator.BADGE_STYLE}#(parley indicator)#[default]")
+    tmux(
+        "set-option", "-t", "legacy", "status-right",
+        f"{custom} {legacy_badge}",
+    )
+    tmux("set-option", "-t", "legacy", "status-right-length", "61")
+
+    assert indicator.ensure() == 1
+
+    assert _tmux_option(tmux, "legacy", "status-right") == custom
+    assert _tmux_option(tmux, "legacy", "status-right-length") == "61"
+    assert not _tmux_option(tmux, "legacy", indicator.STATE_OPTION, local=True)

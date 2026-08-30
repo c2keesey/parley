@@ -672,8 +672,16 @@ def run(device="0"):
         # classification failed or the listener exited between yield/handling.
         if capturing or player.microphone_active():
             player.resume()
-        LISTEN_PID.unlink(missing_ok=True)
-        config.LISTENER_STATE.unlink(missing_ok=True)
+        try:
+            still_owner = int(LISTEN_PID.read_text().strip()) == os.getpid()
+        except (OSError, ValueError):
+            still_owner = False
+        # A replacement may have started while this process was exiting. Only
+        # the PID still recorded as owner may remove shared listener state.
+        if still_owner:
+            LISTEN_PID.unlink(missing_ok=True)
+            config.LISTENER_STATE.unlink(missing_ok=True)
+            indicator.cleanup()
 
 
 def is_running():
@@ -694,6 +702,6 @@ def stop():
             pass
     LISTEN_PID.unlink(missing_ok=True)
     config.LISTENER_STATE.unlink(missing_ok=True)
-    indicator.refresh()
+    indicator.cleanup()
     player.resume()
     return bool(pid)

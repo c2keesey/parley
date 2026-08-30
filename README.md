@@ -121,6 +121,13 @@ Parley-enabled pane shows `⚠ SENDS TO <name>` so a stale target cannot look
 like a dead microphone. Panes where Parley is off stay uncluttered. `parley
 listen status` reports the target name together with the raw pane id.
 
+The tmux integration is reversible: Parley adds its status fragment only to
+sessions containing an enabled pane, remembers whether your status options
+were local or inherited, and restores them when listening stops. A later edit
+you make to the status content or length wins; cleanup removes only Parley's
+owned fragment. `parley off` reconciles the current session, and `parley
+uninstall` stops the listener and cleans up every Parley indicator.
+
 ```sh
 brew install whisper-cpp     # one-time
 parley listen on       # from inside the tmux pane running the agent

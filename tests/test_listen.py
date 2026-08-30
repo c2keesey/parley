@@ -23,6 +23,7 @@ def isolate_microphone_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(listen.config, "TRIGGERS", tmp_path / "triggers")
     listen.triggers.load.cache_clear()
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+    monkeypatch.setattr(listen.indicator, "cleanup", lambda: 0)
 
 
 @pytest.mark.parametrize("heard", [
@@ -155,6 +156,45 @@ def test_listener_state_is_persisted_and_refreshed(tmp_path, monkeypatch):
 
     assert listen.listener_state() == "capturing"
     assert refreshed == [True]
+
+
+def test_listener_exit_and_explicit_stop_cleanup_the_indicator(
+        tmp_path, monkeypatch):
+    cleaned = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter(()))
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(
+        listen.indicator, "cleanup", lambda: cleaned.append(True))
+
+    listen.run()
+    listen.stop()
+
+    assert cleaned == [True, True]
+
+
+def test_replaced_listener_does_not_cleanup_the_new_owner(tmp_path, monkeypatch):
+    cleaned = []
+    listener_pid = tmp_path / "listener.pid"
+    monkeypatch.setattr(listen, "LISTEN_PID", listener_pid)
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(
+        listen.indicator, "cleanup", lambda: cleaned.append(True))
+
+    def replace_owner(device):
+        listener_pid.write_text("999999")
+        return iter(())
+
+    monkeypatch.setattr(listen, "bursts", replace_owner)
+
+    listen.run()
+
+    assert listener_pid.read_text() == "999999"
+    assert cleaned == []
 
 
 def test_submission_log_does_not_include_dictated_text(monkeypatch):

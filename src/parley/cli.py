@@ -95,6 +95,9 @@ def main(argv=None):
 
     if command == "uninstall":
         hooks.uninstall(args.harness)
+        from parley import listen as listener
+
+        listener.stop()
         stop()
         return
 
@@ -125,7 +128,10 @@ def main(argv=None):
             stop()
         from parley import indicator
 
-        indicator.refresh()
+        if command == "status":
+            indicator.refresh()
+        else:
+            indicator.ensure()
         _report(keys)
         return
 
