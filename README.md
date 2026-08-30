@@ -270,6 +270,13 @@ equally new. So the reply is anchored to the last real user message — tool
 results are recorded as user entries and are excluded — and the transcript is
 allowed to settle before anything is read.
 
+Duplicate hook delivery is keyed to the harness's stable turn identity: Codex's
+turn ID or Claude's assistant-message UUID from the transcript. The reply text
+is never used as an identifier. A private, bounded receipt history serializes
+concurrent hooks, while durable queue links let a later hook repair a crash
+between claiming a turn and publishing its speech without enqueuing it twice.
+Reply content is removed from receipts as soon as its queue item finishes.
+
 A session is keyed by its **terminal pane**, not by any agent's session id. The
 pane is what voice actually addresses: it is where the reply is spoken and
 where a dictated message is typed back. It also means this works under an agent

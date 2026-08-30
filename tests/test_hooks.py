@@ -1,6 +1,7 @@
 import json
+import multiprocessing
+import os
 import stat
-import threading
 from types import SimpleNamespace
 
 import pytest
@@ -271,37 +272,39 @@ def test_duplicate_delivery_of_one_turn_is_enqueued_once(monkeypatch):
     assert len(queued) == 1
 
 
-def test_concurrent_duplicate_delivery_is_atomically_enqueued_once(monkeypatch):
-    queued = []
-    queued_lock = threading.Lock()
-    both_resolved = threading.Barrier(2)
+def test_concurrent_hook_processes_atomically_enqueue_once(monkeypatch, tmp_path):
+    context = multiprocessing.get_context("fork")
+    both_resolved = context.Barrier(2)
+    enqueues = tmp_path / "enqueues"
 
     def reply(payload):
         if not payload.get("resolved"):
             payload["resolved"] = True
-            both_resolved.wait(timeout=2)
+            both_resolved.wait(timeout=5)
         return "turn:thread-1:turn-1", "race reply"
 
     def enqueue(text, receipt=None):
-        with queued_lock:
-            queued.append(text)
+        descriptor = os.open(
+            enqueues, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(descriptor, b"queued\n")
+        finally:
+            os.close(descriptor)
 
     monkeypatch.setattr(hooks, "reply_from", reply)
     monkeypatch.setattr(hooks, "enqueue", enqueue)
     monkeypatch.setattr(hooks, "drain", lambda: None)
     monkeypatch.setattr(hooks.time, "sleep", lambda seconds: None)
-    workers = [
-        threading.Thread(target=hooks.speak_reply, args=("pane-42", {}))
-        for _ in range(2)
-    ]
+    workers = [context.Process(
+        target=hooks.speak_reply, args=("pane-42", {})) for _ in range(2)]
 
     for worker in workers:
         worker.start()
     for worker in workers:
-        worker.join(timeout=3)
+        worker.join(timeout=6)
 
-    assert all(not worker.is_alive() for worker in workers)
-    assert len(queued) == 1
+    assert [worker.exitcode for worker in workers] == [0, 0]
+    assert enqueues.read_text().splitlines() == ["queued"]
 
 
 def test_dedup_history_is_bounded_and_private(monkeypatch):
