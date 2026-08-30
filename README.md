@@ -58,8 +58,10 @@ install, leaves unrelated settings and hooks alone, preserves file modes, and
 creates a sibling `.parley-backup` before install or update replaces an
 existing file. That backup is the stable pre-Parley recovery snapshot;
 uninstall never creates or overwrites it with an intermediate installed
-configuration. A truncated or structurally invalid settings file stops the
-whole operation without mutation.
+configuration. Skill updates additionally preserve every distinct displaced
+skill body as a content-addressed `.parley-backup.<sha256>` file, so repeated
+updates cannot erase local skill customizations. A truncated or structurally
+invalid settings file stops the whole operation without mutation.
 
 Pass `--harness claude-code` or `--harness codex` to target one. After upgrading
 the package, inspect and apply integration changes explicitly:

@@ -69,10 +69,14 @@ MESSAGE_MODEL_URL = (
 
 TARGET = config.STATE / "target"
 LISTEN_PID = config.STATE / "listener.pid"
+WHISPER_BINARIES = ("whisper-cli", "whisper-cpp")
 
 
 def whisper_bin():
-    return shutil.which("whisper-cli") or shutil.which("whisper-cpp")
+    return next(
+        (found for name in WHISPER_BINARIES if (found := shutil.which(name))),
+        None,
+    )
 
 
 def ensure_model():

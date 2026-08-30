@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from parley import config, hooks
+from parley import config, hooks, listen
 
 
 @pytest.fixture(autouse=True)
@@ -245,6 +245,49 @@ def test_install_update_uninstall_preserves_original_recovery_backup(harness):
 
 
 @pytest.mark.parametrize("harness", ["claude-code", "codex"])
+def test_repeated_skill_updates_preserve_every_displaced_user_copy(
+    harness, tmp_path, monkeypatch, capsys
+):
+    source = tmp_path / "bundled-skill.md"
+    source.write_text("bundled v1\n")
+    monkeypatch.setattr(hooks, "_skill_source", lambda: source)
+    skill = hooks.SKILL_DIRS[harness] / "parley" / "SKILL.md"
+
+    hooks.install(harness)
+    source.write_text("bundled v2\n")
+    hooks.install(harness, operation="update")
+    stable_backup = skill.with_suffix(skill.suffix + ".parley-backup")
+    assert stable_backup.read_text() == "bundled v1\n"
+
+    skill.write_text("bundled v2\n\nuser customization one\n")
+    skill.chmod(0o600)
+    first_user_backup = hooks._displaced_backup_path(skill)
+    source.write_text("bundled v3\n")
+
+    hooks.install(harness, dry_run=True, operation="update")
+    assert str(first_user_backup) in capsys.readouterr().out
+    assert not first_user_backup.exists()
+    hooks.install(harness, operation="update")
+
+    assert skill.read_text() == "bundled v3\n"
+    assert stable_backup.read_text() == "bundled v1\n"
+    assert first_user_backup.read_text() == (
+        "bundled v2\n\nuser customization one\n"
+    )
+    assert stat.S_IMODE(first_user_backup.stat().st_mode) == 0o600
+
+    skill.write_text("bundled v3\n\nuser customization two\n")
+    second_user_backup = hooks._displaced_backup_path(skill)
+    source.write_text("bundled v4\n")
+    hooks.install(harness, operation="update")
+
+    assert skill.read_text() == "bundled v4\n"
+    assert first_user_backup.read_text().endswith("user customization one\n")
+    assert second_user_backup.read_text().endswith("user customization two\n")
+    assert first_user_backup != second_user_backup
+
+
+@pytest.mark.parametrize("harness", ["claude-code", "codex"])
 def test_uninstall_never_backs_up_a_parley_created_intermediate(harness):
     path = hooks.TARGETS[harness]
     backup = path.with_suffix(path.suffix + ".parley-backup")
@@ -414,6 +457,16 @@ def test_microphone_permission_guidance_is_macos_contextual(monkeypatch, capsys)
     assert "System Settings > Privacy & Security > Microphone" in (
         capsys.readouterr().out
     )
+
+
+def test_preflight_accepts_whisper_cpp_runtime_alias(monkeypatch, capsys):
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/opt/bin/whisper-cpp")
+
+    hooks.preflight("codex")
+
+    output = capsys.readouterr().out
+    assert "whisper-cli / whisper-cpp — /opt/bin/whisper-cpp" in output
+    assert "whisper-cli / whisper-cpp — missing" not in output
 
 
 def test_hook_stays_silent_when_the_session_is_off(monkeypatch):

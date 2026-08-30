@@ -369,18 +369,54 @@ def _backup_path(path):
     return path.with_suffix(path.suffix + ".parley-backup")
 
 
-def _atomic_write(path, content, *, default_mode, backup=True):
+def _displaced_backup_path(path):
+    """Content-addressed recovery path for a later displaced file body."""
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return Path(f"{_backup_path(path)}.{digest}")
+
+
+def _recovery_destination(path, *, preserve_displaced):
+    """The new recovery copy needed before replacing *path*, if any."""
+    if not path.exists():
+        return None
+    stable = _backup_path(path)
+    if not stable.exists():
+        return stable
+    if not preserve_displaced:
+        return None
+    try:
+        current = path.read_bytes()
+        if stable.read_bytes() == current:
+            return None
+        displaced = _displaced_backup_path(path)
+        if displaced.exists():
+            if displaced.read_bytes() != current:
+                raise SystemExit(
+                    f"recovery hash collision at {displaced}; no changes made"
+                )
+            return None
+        return displaced
+    except OSError as exc:
+        raise SystemExit(
+            f"cannot prepare recovery copy for {path}; no changes made ({exc})"
+        ) from exc
+
+
+def _atomic_write(
+    path, content, *, default_mode, backup=True, preserve_displaced=False
+):
     """Replace a file without a partial-write window and retain its mode."""
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = default_mode
     if path.exists():
         mode = stat.S_IMODE(path.stat().st_mode)
-        backup_path = _backup_path(path)
-        if backup and not backup_path.exists():
-            # This is the pre-Parley recovery point, not a rolling snapshot.
-            # Updates and uninstall must not replace it with an intermediate
-            # configuration that already contains the Parley integration.
-            shutil.copy2(path, backup_path)
+        recovery = _recovery_destination(
+            path, preserve_displaced=preserve_displaced
+        )
+        if backup and recovery is not None:
+            # Settings keep one stable pre-Parley snapshot. Skills additionally
+            # preserve every distinct body displaced by a later update.
+            shutil.copy2(path, recovery)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary)
     try:
@@ -404,6 +440,7 @@ def _write_skill(destination):
         destination,
         _skill_source().read_bytes(),
         default_mode=0o644,
+        preserve_displaced=True,
     )
 
 
@@ -438,30 +475,50 @@ def _report_plans(plans, operation, *, dry_run):
         print(f"  settings {plan.settings} — hook {plan.hook_action}")
         _report_backup(plan.settings, plan.hook_action != "unchanged")
         print(f"  skill    {plan.skill} — skill {plan.skill_action}")
-        _report_backup(plan.skill, plan.skill_action != "unchanged")
+        _report_backup(
+            plan.skill,
+            plan.skill_action != "unchanged",
+            preserve_displaced=True,
+        )
 
 
-def _report_backup(path, will_replace):
+def _report_backup(path, will_replace, *, preserve_displaced=False):
     backup = _backup_path(path)
-    if backup.exists():
-        action = "preserve existing recovery snapshot"
-    elif will_replace and path.exists():
+    recovery = None
+    if will_replace:
+        recovery = _recovery_destination(
+            path, preserve_displaced=preserve_displaced
+        )
+    if recovery is not None and recovery != backup:
+        print(f"  backup   {backup} — preserve existing recovery snapshot")
+        print(f"  backup   {recovery} — create displaced-file recovery snapshot")
+        return
+    if recovery == backup:
         action = "create recovery snapshot"
+    elif backup.exists():
+        action = "preserve existing recovery snapshot"
     else:
         action = "not needed"
     print(f"  backup   {backup} — {action}")
 
 
 def _report_prerequisites():
+    from parley import listen
+
     print("Prerequisites for hands-free input:")
     print(f"  macOS — {'ready' if platform.system() == 'Darwin' else 'required'}")
     for executable, reason in (
         ("tmux", "session input routing"),
         ("ffmpeg", "microphone capture and speech resume"),
-        ("whisper-cli", "local trigger recognition"),
     ):
         found = shutil.which(executable)
         print(f"  {executable} — {found if found else 'missing'} ({reason})")
+    whisper_names = " / ".join(listen.WHISPER_BINARIES)
+    whisper = listen.whisper_bin()
+    print(
+        f"  {whisper_names} — {whisper if whisper else 'missing'} "
+        "(local trigger recognition)"
+    )
     if platform.system() == "Darwin":
         print(
             "Microphone permission: macOS grants access to your terminal app "

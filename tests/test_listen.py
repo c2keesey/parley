@@ -84,6 +84,16 @@ def test_final_message_uses_local_whisper_without_api_key(tmp_path, monkeypatch)
     assert listen.transcribe_cloud([b"\x00\x00"] * 400) == "Local message."
 
 
+def test_whisper_binary_accepts_whisper_cpp_fallback(monkeypatch):
+    monkeypatch.setattr(
+        listen.shutil,
+        "which",
+        lambda name: "/opt/bin/whisper-cpp" if name == "whisper-cpp" else None,
+    )
+
+    assert listen.whisper_bin() == "/opt/bin/whisper-cpp"
+
+
 @pytest.mark.parametrize(("spoken", "expected"), [
     (
         "okay computer draft the note Okay, computer and keep going send it",
