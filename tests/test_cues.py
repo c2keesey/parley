@@ -159,7 +159,69 @@ def test_completed_cue_releases_process_ownership(monkeypatch):
 
     assert owned_while_playing == [4242]
     assert processes.owned_pids(config.CUE_PROCESSES, "cue") == []
-    assert not config.PIDFILE.exists()
+
+
+def test_finish_kills_reaps_and_cleans_marker_after_two_timeouts():
+    events = []
+
+    class StubbornProcess:
+        pid = 4242
+
+        def wait(self, timeout=None):
+            events.append(("wait", timeout))
+            assert processes.owned_pids(config.CUE_PROCESSES, "cue") == [self.pid]
+            if timeout is not None:
+                raise cues.subprocess.TimeoutExpired("afplay", timeout)
+            events.append(("reaped", None))
+            return -9
+
+        def terminate(self):
+            events.append(("terminate", None))
+
+        def kill(self):
+            events.append(("kill", None))
+
+    ownership = processes.claim_in(config.CUE_PROCESSES, 4242, "cue")
+    assert ownership is not None
+
+    cues._finish(StubbornProcess(), ownership)
+
+    assert events == [
+        ("wait", 5),
+        ("terminate", None),
+        ("wait", 1),
+        ("kill", None),
+        ("wait", None),
+        ("reaped", None),
+    ]
+    assert processes.owned_pids(config.CUE_PROCESSES, "cue") == []
+
+
+def test_finish_reaps_after_process_exits_during_kill_race():
+    waits = []
+
+    class ExitedProcess:
+        pid = 4242
+
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            if timeout is not None:
+                raise cues.subprocess.TimeoutExpired("afplay", timeout)
+            return 0
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            raise ProcessLookupError
+
+    ownership = processes.claim_in(config.CUE_PROCESSES, 4242, "cue")
+    assert ownership is not None
+
+    cues._finish(ExitedProcess(), ownership)
+
+    assert waits == [5, 1, None]
+    assert processes.owned_pids(config.CUE_PROCESSES, "cue") == []
 
 
 @pytest.mark.parametrize("name", ["wake", "send"])

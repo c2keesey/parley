@@ -218,7 +218,7 @@ def test_detached_failed_drain_has_no_error_cue_or_marker_at_return(
 
         def wait(self, timeout=None):
             wait_calls.append(timeout)
-            assert config.PIDFILE.read_text().split() == [str(self.pid)]
+            assert processes.owned_pids(config.CUE_PROCESSES, "cue") == [self.pid]
             self.running = False
             return 0
 
@@ -236,7 +236,7 @@ def test_detached_failed_drain_has_no_error_cue_or_marker_at_return(
     # boundary assertions ensure there is no child or marker for it to orphan.
     assert wait_calls == [5]
     assert not proc.running
-    assert not config.PIDFILE.exists()
+    assert processes.owned_pids(config.CUE_PROCESSES, "cue") == []
 
 
 def test_invalid_macos_voice_is_a_sanitized_synthesis_failure(monkeypatch):

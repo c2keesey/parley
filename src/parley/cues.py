@@ -114,18 +114,44 @@ def build(name):
 
 def _finish(proc, ownership):
     """Reap a short cue and release its marker before the caller can exit."""
+    reaped = False
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
+        try:
+            proc.wait(timeout=5)
+            reaped = True
+            return
+        except subprocess.TimeoutExpired:
+            pass
         try:
             proc.terminate()
-            proc.wait(timeout=1)
-        except (subprocess.TimeoutExpired, OSError):
+        except ProcessLookupError:
+            # It exited between the timed wait and the signal; wait still
+            # needs to collect its status below.
             pass
+        try:
+            proc.wait(timeout=1)
+            reaped = True
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            # The same already-exited race is safe; final wait reaps it.
+            pass
+        # SIGKILL cannot be ignored. A final wait without a timeout guarantees
+        # the child is reaped before detached drain can call os._exit().
+        proc.wait()
+        reaped = True
+    except (ChildProcessError, ProcessLookupError):
+        # No live child remains to orphan and there is no status left to reap.
+        reaped = True
     except OSError:
+        # Keep the marker when ownership cannot be safely discharged.
         pass
     finally:
-        processes.release(ownership)
+        if reaped:
+            processes.release(ownership)
 
 
 def play(name, wait=True):
