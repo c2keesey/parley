@@ -73,27 +73,39 @@ KEY_FILES = [
 def private_directory(path):
     """Create a state directory that only the current user can inspect."""
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(path, 0o700)
+    current = path
+    while current == STATE or STATE in current.parents:
+        os.chmod(current, 0o700)
+        if current == STATE:
+            break
+        current = current.parent
     return path
+
+
+def private_open(path, mode="w"):
+    """Open a private state file for writing or appending."""
+    private_directory(path.parent)
+    flags = {
+        "w": os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+        "a": os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+    }.get(mode)
+    if flags is None:
+        raise ValueError("private_open mode must be 'w' or 'a'")
+    descriptor = os.open(path, flags, 0o600)
+    os.chmod(path, 0o600)
+    return os.fdopen(descriptor, mode, encoding="utf-8")
 
 
 def private_write(path, content):
     """Write a private state file without a world-readable creation window."""
-    private_directory(path.parent)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    descriptor = os.open(path, flags, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+    with private_open(path) as handle:
         handle.write(content)
-    os.chmod(path, 0o600)
 
 
 def log(msg):
     try:
-        private_directory(STATE)
-        descriptor = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(descriptor, "a", encoding="utf-8") as fh:
+        with private_open(LOG, "a") as fh:
             fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
-        os.chmod(LOG, 0o600)
     except OSError:
         pass
 
