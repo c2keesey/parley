@@ -91,6 +91,8 @@ resuming the unspoken remainder after you interrupt a reply.
 parley on                 # speak replies in this session
 parley off                # stop
 parley status
+parley doctor             # read-only setup and readiness checks
+parley doctor --json      # stable output for tools and future UI
 
 parley say "Tests are green, deploying now."
 parley say --voice nova "Heads up, that migration looks wrong."

@@ -57,6 +57,9 @@ def build_parser():
 
     sub.add_parser("stop", help="drop the queue and stop playing")
     sub.add_parser("cues", help="regenerate the notification tones")
+    doctor = sub.add_parser("doctor", help="check setup without changing it")
+    doctor.add_argument("--json", action="store_true",
+                        help="print stable machine-readable diagnostics")
     for name, help_text in [("install", "add the hook to your agent's settings"),
                             ("uninstall", "remove the hook")]:
         command = sub.add_parser(name, help=help_text)
@@ -83,6 +86,15 @@ def main(argv=None):
     except config.ConfigurationError as exc:
         print(f"parley: configuration error: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
+
+    if command == "doctor":
+        from parley import doctor
+
+        report = doctor.collect()
+        doctor.print_report(report, as_json=args.json)
+        if report["overall"] == "fail":
+            raise SystemExit(1)
+        return
 
     if command == "hook":
         hooks.handle(argv=argv)
