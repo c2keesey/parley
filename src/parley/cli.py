@@ -57,7 +57,6 @@ def build_parser():
 
     sub.add_parser("stop", help="drop the queue and stop playing")
     sub.add_parser("cues", help="regenerate the notification tones")
-
     for name, help_text in [("install", "add the hook to your agent's settings"),
                             ("uninstall", "remove the hook")]:
         command = sub.add_parser(name, help=help_text)
@@ -78,6 +77,12 @@ def main(argv=None):
 
     args = build_parser().parse_args(argv)
     command = args.command or "hook"
+
+    try:
+        config.require_valid_configuration()
+    except config.ConfigurationError as exc:
+        print(f"parley: configuration error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
 
     if command == "hook":
         hooks.handle(argv=argv)
