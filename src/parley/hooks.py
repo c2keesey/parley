@@ -394,9 +394,9 @@ def _atomic_write(path, content, *, default_mode, backup=True):
         temporary_path.unlink(missing_ok=True)
 
 
-def _save(path, data):
+def _save(path, data, *, backup=True):
     content = (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode()
-    _atomic_write(path, content, default_mode=0o600)
+    _atomic_write(path, content, default_mode=0o600, backup=backup)
 
 
 def _write_skill(destination):
@@ -582,7 +582,7 @@ def uninstall(harness=None, dry_run=False):
             skill_action = "unchanged"
         print(f"{plan.name}:")
         print(f"  settings {plan.settings} — hook {hook_action}")
-        _report_backup(plan.settings, hook_owned)
+        _report_backup(plan.settings, False)
         print(f"  skill    {plan.skill} — skill {skill_action}")
         _report_backup(plan.skill, False)
 
@@ -591,7 +591,9 @@ def uninstall(harness=None, dry_run=False):
         for plan, hook_owned, skill_owned, _ in removals:
             if hook_owned:
                 _remove_parley_hooks(plan.data, plan.settings)
-                _save(plan.settings, plan.data)
+                # Uninstall preserves the recovery point created by install;
+                # it must never snapshot the Parley-installed intermediate.
+                _save(plan.settings, plan.data, backup=False)
             if skill_owned:
                 plan.skill.unlink()
                 try:

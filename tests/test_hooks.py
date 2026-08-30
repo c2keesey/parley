@@ -244,6 +244,20 @@ def test_install_update_uninstall_preserves_original_recovery_backup(harness):
     assert json.loads(path.read_text()) == {"unrelated": {"keep": "original"}}
 
 
+@pytest.mark.parametrize("harness", ["claude-code", "codex"])
+def test_uninstall_never_backs_up_a_parley_created_intermediate(harness):
+    path = hooks.TARGETS[harness]
+    backup = path.with_suffix(path.suffix + ".parley-backup")
+
+    hooks.install(harness)
+    assert not backup.exists()
+
+    hooks.uninstall(harness)
+
+    assert not backup.exists()
+    assert json.loads(path.read_text()) == {}
+
+
 def test_invalid_json_in_one_harness_prevents_all_harness_mutation():
     claude = hooks.TARGETS["claude-code"]
     codex = hooks.TARGETS["codex"]
