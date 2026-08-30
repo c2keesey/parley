@@ -16,7 +16,10 @@ class _UnreadableInput:
         raise AssertionError("bare parley must not read stdin")
 
 
-def test_bare_invocation_prints_guidance_without_reading_tty(monkeypatch, capsys):
+def test_bare_invocation_prints_public_help_without_reading_tty(
+    monkeypatch,
+    capsys,
+):
     monkeypatch.setattr(cli.sys, "stdin", _UnreadableInput(tty=True))
 
     cli.main([])
@@ -25,6 +28,14 @@ def test_bare_invocation_prints_guidance_without_reading_tty(monkeypatch, capsys
     assert "usage: parley" in output
     assert "parley status" in output
     assert "parley on" in output
+    for command in (
+        "on", "off", "toggle", "status", "default", "say", "voices",
+        "listen", "enroll", "stop", "cues", "install", "uninstall",
+    ):
+        assert f"\n    {command} " in output
+    assert "\n    hook " not in output
+    assert "\n    indicator " not in output
+    assert "==SUPPRESS==" not in output
 
 
 def test_bare_invocation_does_not_consume_piped_input(monkeypatch, capsys):
@@ -66,6 +77,13 @@ def test_bare_json_argument_still_dispatches_without_reading_stdin(
     cli.main([payload])
 
     assert handled == [[payload]]
+
+
+def test_hidden_internal_commands_remain_parseable():
+    parser = cli.build_parser()
+
+    assert parser.parse_args(["hook"]).command == "hook"
+    assert parser.parse_args(["indicator", "%42"]).command == "indicator"
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):

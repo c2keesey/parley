@@ -30,7 +30,8 @@ def build_parser():
         ),
     )
     parser.add_argument("--version", action="version", version=__version__)
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(
+        dest="command", title="commands", metavar="COMMAND")
 
     sub.add_parser("on", help="speak replies in this session")
     sub.add_parser("off", help="stop speaking in this session")
@@ -68,8 +69,9 @@ def build_parser():
         command = sub.add_parser(name, help=help_text)
         command.add_argument("--harness", choices=sorted(hooks.TARGETS))
 
-    sub.add_parser("hook", help="hook entry point (payload on stdin)")
-    indicator = sub.add_parser("indicator", help=argparse.SUPPRESS)
+    # Harness-only commands remain parseable but do not belong in public help.
+    sub.add_parser("hook")
+    indicator = sub.add_parser("indicator")
     indicator.add_argument("pane", nargs="?")
     return parser
 
