@@ -87,13 +87,16 @@ def private_open(path, mode="w"):
     private_directory(path.parent)
     flags = {
         "w": os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+        "wb": os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
         "a": os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        "ab": os.O_WRONLY | os.O_CREAT | os.O_APPEND,
     }.get(mode)
     if flags is None:
-        raise ValueError("private_open mode must be 'w' or 'a'")
+        raise ValueError("private_open mode must be writable text or binary")
     descriptor = os.open(path, flags, 0o600)
     os.chmod(path, 0o600)
-    return os.fdopen(descriptor, mode, encoding="utf-8")
+    options = {} if "b" in mode else {"encoding": "utf-8"}
+    return os.fdopen(descriptor, mode, **options)
 
 
 def private_write(path, content):

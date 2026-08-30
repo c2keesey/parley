@@ -106,9 +106,9 @@ def main(argv=None):
         return
 
     if command == "default":
-        config.STATE.mkdir(parents=True, exist_ok=True)
+        config.private_directory(config.STATE)
         if args.state == "on":
-            config.DEFAULT.touch()
+            config.private_write(config.DEFAULT, "")
         elif args.state == "off":
             config.DEFAULT.unlink(missing_ok=True)
         print(f"parley default: {'on' if config.DEFAULT.exists() else 'off'}")
