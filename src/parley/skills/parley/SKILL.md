@@ -15,7 +15,9 @@ While voice is on:
 - Never use AskUserQuestion. It blocks on a dialog that voice cannot answer;
   ask in your reply instead.
 - Use `parley say "..."` to speak during a long task, so the user is not left
-  in silence. It queues behind whatever is already speaking.
+  in silence. It queues behind whatever is already speaking. Manual `say` is
+  deliberately global: `parley off` does not discard it; explicit `parley
+  stop` clears all automatic and manual speech.
 
 For hands-free input, `parley listen on` from inside tmux. The user says
 "okay computer", speaks, then "send it", and the message is typed into the

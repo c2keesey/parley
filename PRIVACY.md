@@ -9,6 +9,9 @@ Parley-operated backend.
 - Personalized trigger matching. Enrollment keeps raw recordings in memory and
   saves only normalized acoustic feature arrays under `~/.parley/triggers`.
 - Session routing, notification cues, and playback coordination.
+- Fixed-size opaque ownership tokens used to cancel only one target's queued
+  or active automatic speech. They do not contain pane names, session names,
+  transcripts, or reply text.
 - Operational logs. Logs contain timestamps, cue names, provider errors,
   timing, byte counts, and message lengths—not dictated or spoken message text.
 
@@ -37,7 +40,8 @@ created with user-only permissions. The local whisper model is cached under
 `~/.cache/parley`.
 
 Run `parley listen off`, then delete those two directories to remove local
-runtime state, logs, personalized trigger features, and the downloaded model.
+runtime state, queue ownership metadata, logs, personalized trigger features,
+and the downloaded model.
 `parley uninstall` removes agent hooks; it intentionally leaves runtime state
 in place so uninstalling does not silently destroy user data.
 

@@ -17,7 +17,7 @@ way people really use them:
 - **Keep your eyes on the work, not the terminal.** Parley reads completed
   replies aloud and lets an agent speak during a long-running task.
 - **Have a real back-and-forth.** Dictate a response, interrupt naturally, or
-  permanently stop speech with a dedicated voice command.
+  silence every session with the explicit global Stop Speech command.
 - **Run several agents without losing the thread.** Each response begins with
   its session name, so you always know who is speaking.
 - **Choose the voice quality you want.** Use the built-in local voice for free,
@@ -89,21 +89,28 @@ resuming the unspoken remainder after you interrupt a reply.
 
 ```sh
 parley on                 # speak replies in this session
-parley off                # stop
+parley off                # stop only this session's automatic speech
 parley status
 
-parley say "Tests are green, deploying now."
+parley say "Tests are green, deploying now."  # global/manual queue
 parley say --voice nova "Heads up, that migration looks wrong."
 parley say --wait "..."   # block until spoken
 
 parley voices             # audition OpenAI voices, or list ElevenLabs voices
-parley stop               # drop the queue, silence everything
+parley stop               # GLOBAL: drop the whole queue, silence everything
 parley default on         # new sessions start speaking
 ```
 
 Turning it on mid-session works without a restart: the confirmation it prints
 is the same instruction the startup hook injects, so it lands in the transcript
 as context.
+
+Automatic hook replies are owned by the pane/session that produced them.
+`parley off` cancels that target's active and pending automatic blocks without
+silencing other sessions. Manual `parley say` lines intentionally belong to
+the shared global queue: turning a session off does not discard them. Use the
+distinct, explicit `parley stop` command when every active, queued, manual, and
+legacy item should be cleared.
 
 ## Hands-free input
 
@@ -276,8 +283,14 @@ where a dictated message is typed back. It also means this works under an agent
 that exposes no session id at all.
 
 Utterances become files in a spool directory named by nanosecond timestamp.
-Any process may enqueue; exactly one drains, chosen by an exclusive `flock`.
-That is what makes overlap impossible rather than merely unlikely.
+Automatic blocks carry a fixed-size opaque owner token and cancellation
+generation inside the private queue item; the active block publishes the same
+bounded metadata in a private state file. Tokens contain no pane name, session
+name, transcript, or reply content. Queue items from older versions have no
+owner and remain playable; target-scoped Off preserves them, while explicit
+global Stop removes them. Any process may enqueue; exactly one drains, chosen
+by an exclusive `flock`. That is what makes overlap impossible rather than
+merely unlikely.
 
 Playback starts with six-tenths of a second of silence, because Bluetooth
 headphones take about that long to switch profiles and will otherwise swallow
