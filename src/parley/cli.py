@@ -1,9 +1,7 @@
 """Command line interface."""
 import argparse
 import os
-import subprocess
 import sys
-import time
 
 from parley import __version__, config, hooks
 from parley.player import detach, drain, enqueue, stop
@@ -49,6 +47,8 @@ def build_parser():
     listen.add_argument("state", nargs="?", choices=["on", "off", "status", "run"])
     listen.add_argument("--device", default=os.environ.get("PARLEY_MIC", "0"),
                         help="avfoundation audio device index")
+    listen.add_argument("--owner-token", help=argparse.SUPPRESS)
+    listen.add_argument("--ready-fd", type=int, help=argparse.SUPPRESS)
 
     enroll = sub.add_parser(
         "enroll", help="record a local personalized trigger profile")
@@ -134,10 +134,15 @@ def main(argv=None):
 
         state = args.state or "status"
         if state == "run":
-            listener.run(args.device)
+            listener.run(args.device, args.owner_token or "", args.ready_fd)
             return
         if state == "off":
-            print("listening: stopped" if listener.stop() else "listening: not running")
+            try:
+                stopped = listener.stop()
+            except listener.ListenerStartupError as exc:
+                print(f"listening: error — {exc}", file=sys.stderr)
+                raise SystemExit(1) from exc
+            print("listening: stopped" if stopped else "listening: not running")
             return
         if state == "status":
             pid = listener.is_running()
@@ -161,19 +166,11 @@ def main(argv=None):
             print("Not inside tmux — there is no pane to type the message into.",
                   file=sys.stderr)
             raise SystemExit(1)
-        if not listener.whisper_bin():
-            print("whisper-cli not found. Install it with: brew install whisper-cpp",
-                  file=sys.stderr)
-            raise SystemExit(1)
-        if not listener.ensure_model():
-            raise SystemExit("could not download the wake-word model")
-        listener.stop()
-        listener.set_target(pane)
-        subprocess.Popen(
-            [sys.argv[0], "listen", "run", "--device", args.device],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True)
-        time.sleep(0.6)
+        try:
+            listener.start(args.device, pane, sys.argv[0])
+        except listener.ListenerStartupError as exc:
+            print(f"listening: error — {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
         print(f"listening: on — say {listener.WAKE!r}, speak, then {listener.SEND!r}")
         print(f"  typing into pane {pane}")
         return
@@ -189,19 +186,21 @@ def main(argv=None):
         # another session. Outside tmux, preserve the previous target.
         pane = os.environ.get("TMUX_PANE", "") or previous_pane
         if was_running:
-            listener.stop()
-            time.sleep(0.3)
+            try:
+                listener.stop()
+            except listener.ListenerStartupError as exc:
+                print(f"listening: error — {exc}", file=sys.stderr)
+                raise SystemExit(1) from exc
         print("Raw recordings stay in memory; only local acoustic features are saved.")
         try:
             metadata = triggers.save(triggers.collect(args.device))
         finally:
             if was_running and pane:
-                listener.set_target(pane)
-                subprocess.Popen(
-                    [sys.argv[0], "listen", "run", "--device", args.device],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, start_new_session=True)
-                time.sleep(0.6)
+                try:
+                    listener.start(args.device, pane, sys.argv[0])
+                except listener.ListenerStartupError as exc:
+                    print(f"listening: error — {exc}", file=sys.stderr)
+                    raise SystemExit(1) from exc
                 print(f"Listening restarted for pane {pane}.")
         print("Personalized triggers: active")
         for name, threshold in metadata["thresholds"].items():
