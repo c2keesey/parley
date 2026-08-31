@@ -10,7 +10,7 @@ func runMicrophoneTests() throws {
 
 private func testDecodesPrivacySafeInventory() throws {
   let json =
-    #"{"available":true,"contract_version":1,"devices":[{"index":2,"name":"USB Mic","serial":"serial-1","selector":"uid:stable-uid","uid":"stable-uid"}]}"#
+    #"{"available":true,"contract_version":1,"devices":[{"index":2,"name":"USB Mic","serial":"serial-1","selector":"uid:stable-uid","supports_stable_selector":true,"uid":"stable-uid"}]}"#
 
   let inventory = try ParleyMicrophoneInventory.decode(Data(json.utf8))
 
@@ -19,6 +19,10 @@ private func testDecodesPrivacySafeInventory() throws {
   try expect(
     inventory.devices[0].selector == "uid:stable-uid",
     "stable device selector should decode"
+  )
+  try expect(
+    inventory.devices[0].supportsStableSelector,
+    "stable selector support should decode explicitly"
   )
 }
 

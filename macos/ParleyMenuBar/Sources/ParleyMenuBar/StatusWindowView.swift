@@ -136,7 +136,7 @@ struct StatusWindowView: View {
                 .textSelection(.enabled)
             }
             Spacer()
-            Button("Use") {
+            Button("Use This Time") {
               model.useMicrophone(device)
             }
             .disabled(model.isWorking || model.snapshot?.target.available != true)

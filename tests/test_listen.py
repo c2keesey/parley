@@ -189,13 +189,25 @@ class FakeAudioStream:
     def read(self, size):
         return next(self.chunks, b"")
 
+    def close(self):
+        pass
+
 
 class FakeAudioProcess:
     def __init__(self, chunks):
         self.stdout = FakeAudioStream(chunks)
+        self.stderr = FakeAudioStream([])
+        self.waited = False
 
     def terminate(self):
         pass
+
+    def poll(self):
+        return 0
+
+    def wait(self, timeout=None):
+        self.waited = True
+        return 0
 
 
 class FakeErrorStream:
@@ -203,7 +215,11 @@ class FakeErrorStream:
         self.content = content
 
     def read(self, size):
-        return self.content[:size]
+        content, self.content = self.content[:size], self.content[size:]
+        return content
+
+    def close(self):
+        pass
 
 
 def test_capture_failure_is_classified_without_logging_backend_text(monkeypatch):
@@ -224,6 +240,46 @@ def test_capture_failure_is_classified_without_logging_backend_text(monkeypatch)
     assert list(listen.bursts()) == []
     assert statuses[-1] == ("denied", "permission_denied")
     assert all("private backend suffix" not in item for item in logs)
+    assert process.waited
+
+
+def test_capture_error_collector_drains_and_bounds_untrusted_stderr():
+    private = b"permission denied" + b"x" * (
+        microphone.MAX_BACKEND_ERROR_BYTES * 2
+    )
+    collector = listen._CaptureErrorCollector(FakeErrorStream(private))
+
+    retained = collector.finish()
+
+    assert len(retained) == microphone.MAX_BACKEND_ERROR_BYTES
+    assert retained.startswith(b"permission denied")
+
+
+def test_stuck_capture_is_terminated_killed_and_reaped():
+    actions = []
+
+    class StuckProcess:
+        stdout = FakeAudioStream([])
+        stderr = FakeAudioStream([])
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            actions.append("terminate")
+
+        def wait(self, timeout=None):
+            actions.append("wait")
+            if actions.count("wait") == 1:
+                raise listen.subprocess.TimeoutExpired("ffmpeg", timeout)
+            return 0
+
+        def kill(self):
+            actions.append("kill")
+
+    listen._reap_capture(StuckProcess())
+
+    assert actions == ["terminate", "wait", "kill", "wait"]
 
 
 def audio_chunks(voiced_frames):

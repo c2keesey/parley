@@ -31,6 +31,12 @@ def test_device_inventory_is_metadata_only_and_allow_listed(monkeypatch):
 
     def run(command, **kwargs):
         calls.append((command, kwargs))
+        if command[2:4] == ["-h", "demuxer=avfoundation"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="  -audio_device_id <string> select by stable id\n",
+                stderr="",
+            )
         return SimpleNamespace(
             returncode=1,
             stderr=inventory(
@@ -53,6 +59,9 @@ def test_device_inventory_is_metadata_only_and_allow_listed(monkeypatch):
     ]
     assert kwargs["stdout"] is microphone.subprocess.DEVNULL
     assert "-t" not in command
+    assert calls[1][0] == [
+        "/mock/ffmpeg", "-hide_banner", "-h", "demuxer=avfoundation",
+    ]
 
 
 def test_inventory_ignores_video_backend_noise_and_control_characters():
@@ -62,6 +71,50 @@ def test_inventory_ignores_video_backend_noise_and_control_characters():
 
     assert [item.name for item in devices] == ["Desk Mic"]
     assert "private" not in json.dumps([item.public() for item in devices])
+
+
+def test_older_backend_degrades_to_current_index_without_uid_claim(monkeypatch):
+    def run(command, **kwargs):
+        if "-list_devices" in command:
+            return SimpleNamespace(
+                returncode=1,
+                stderr=inventory((3, "USB Mic", "not-supported-by-backend")),
+            )
+        return SimpleNamespace(
+            returncode=0,
+            stdout="  -audio_device_index <int> select by index\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(microphone.subprocess, "run", run)
+
+    [device] = microphone.enumerate_devices("/older/ffmpeg")
+
+    assert device.selector == "3"
+    assert not device.supports_stable_selector
+
+    monkeypatch.setattr(microphone, "enumerate_devices", lambda: [device])
+    with pytest.raises(microphone.CaptureUnavailable):
+        microphone.prepare_capture("uid:not-supported-by-backend")
+
+
+def test_standard_avfoundation_inventory_uses_index_and_exact_numeric_command():
+    output = """\
+[AVFoundation indev @ 0x600003a0c000] AVFoundation video devices:
+[AVFoundation indev @ 0x600003a0c000] [0] FaceTime HD Camera
+[AVFoundation indev @ 0x600003a0c000] AVFoundation audio devices:
+[AVFoundation indev @ 0x600003a0c000] [0] MacBook Pro Microphone
+[AVFoundation indev @ 0x600003a0c000] [1] External Microphone
+"""
+
+    devices = microphone.parse_devices(output)
+
+    assert [device.selector for device in devices] == ["0", "1"]
+    assert microphone.capture_command("1", "/mock/ffmpeg") == [
+        "/mock/ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "avfoundation", "-i", ":1",
+        "-ac", "1", "-ar", "16000", "-f", "s16le", "-",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -138,14 +191,37 @@ def test_stopping_retains_last_device_identity_for_future_drift_detection(
 
 
 def test_stable_uid_survives_index_change(monkeypatch):
-    moved = microphone.MicrophoneDevice(4, "USB Mic", "stable-uid")
+    moved = microphone.MicrophoneDevice(
+        4, "USB Mic", "stable-uid", supports_stable_selector=True,
+    )
     monkeypatch.setattr(microphone, "enumerate_devices", lambda: [moved])
 
     assert microphone.prepare_capture("uid:stable-uid") == moved
     assert microphone.capture_command("uid:stable-uid", "/mock/ffmpeg")[:8] == [
         "/mock/ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-f", "avfoundation", "-audio_device_id", "uid:stable-uid",
+        "-f", "avfoundation", "-audio_device_id", "stable-uid",
     ]
+
+
+def test_status_writer_rejects_malformed_public_fields():
+    malformed = microphone.MicrophoneDevice(True, "Built-in")
+
+    with pytest.raises(ValueError):
+        microphone.write_status(
+            "ready", "capture_active", "0", device=malformed, pid=123,
+        )
+
+    assert not (config.STATE / "microphone-status.json").exists()
+
+
+def test_status_reader_rejects_malformed_device_shape_without_raising():
+    config.STATE.mkdir()
+    document = microphone._default_status("0")
+    document["device"] = ["not", "a", "device"]
+    (config.STATE / "microphone-status.json").write_text(json.dumps(document))
+
+    assert microphone.read_status()["state"] == "unknown"
+    assert microphone.read_status()["device"] is None
 
 
 def test_status_document_never_persists_backend_text():

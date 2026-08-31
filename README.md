@@ -117,7 +117,7 @@ only after the listener's normal ffmpeg stream delivers frames; a live listener
 PID alone is not microphone evidence. Permission denial, a missing or reindexed
 device, another app holding the device, and an unrecognized capture failure all
 remain distinct. The status window can open the Microphone privacy pane or
-explicitly restart listening with an available stable device ID, but it never
+explicitly restart listening with an available device selector, but it never
 changes permission itself.
 
 ```sh
@@ -162,10 +162,12 @@ parley enroll          # optional, personalized local trigger matching
 or logged; only recognized conditions are mapped, and everything else stays a
 generic failure. If a saved numeric index now points to a different device,
 Parley refuses to silently switch microphones. Choose the replacement shown by
-`parley mic devices` with `parley listen on --device uid:...`; a stable UID
-continues to identify the same device when its numeric index changes. Set the
-same non-secret selector in `PARLEY_MIC` to make it the default for new listener
-commands.
+`parley mic devices`. Newer ffmpeg builds that explicitly expose
+`audio_device_id` provide a stable `uid:...` selector; older
+builds honestly provide the current index and Parley detects later name or ID
+drift instead of pretending that index is stable. Use the shown selector with
+`parley listen on --device SELECTOR`. Set the same non-secret selector in
+`PARLEY_MIC` to make it the default for new listener commands.
 
 Defaults: say **"okay computer"**, talk, then **"send it"**. A quiet low tone
 confirms it woke, a soft two-note cue confirms it sent, and a falling tone
@@ -248,10 +250,11 @@ send command. Pick a wake phrase you would not use in ordinary conversation.
 
 ### What it needs from you
 
-macOS grants microphone permission to the application responsible for starting
-capture—normally your terminal for CLI use, or the Parley companion when you
-start listening there. macOS may prompt on the first capture attempt. Parley
-does not answer that prompt or change the setting. Review or revoke access in
+macOS grants microphone permission to the application it identifies as the
+responsible capture host. That identity can depend on how the external ffmpeg
+process was launched, so Parley does not infer it from the menu app or listener
+PID. macOS may prompt on the first capture attempt. Parley does not answer that
+prompt or change the setting. Review or revoke the listed host in
 **System Settings > Privacy & Security > Microphone**, then restart the
 listener after changing it.
 
@@ -283,7 +286,7 @@ Every knob is an environment variable.
 | `PARLEY_WAKE` | `okay computer` | phrase that starts capture |
 | `PARLEY_SEND` | `send it` | phrase that submits |
 | `PARLEY_STOP_TALKING` | `stop talking` | local interrupt used after the wake phrase during playback |
-| `PARLEY_MIC` | `0` | avfoundation input index, name, `uid:...`, or `serial:...`; stable IDs avoid index drift |
+| `PARLEY_MIC` | `0` | avfoundation input index, name, or an advertised `uid:...`; stable UIDs avoid index drift |
 | `PARLEY_MIC_THRESHOLD` | `500` | raise it in a noisy room |
 | `PARLEY_MIN_SPEECH` | `0.10` | minimum voiced seconds retained for trigger detection |
 | `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | cloud model when an OpenAI key exists |

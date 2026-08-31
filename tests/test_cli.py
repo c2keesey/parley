@@ -155,7 +155,8 @@ def test_mic_devices_json_exposes_only_sanitized_inventory(monkeypatch, capsys):
             "index": 2,
             "name": "USB Mic",
             "serial": "serial-1",
-            "selector": "uid:stable-uid",
+            "selector": "2",
+            "supports_stable_selector": False,
             "uid": "stable-uid",
         }],
     }

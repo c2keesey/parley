@@ -11,7 +11,7 @@ func runStatusTests() throws {
 
 private func testDecodesVersionedStatusContract() throws {
   let json =
-    #"{"contract_version":2,"listener_running":true,"listener_state":"ready","microphone":{"state":"ready","reason":"capture_active","selector":"uid:built-in","device":{"index":0,"name":"Built-in Microphone","uid":"built-in","serial":null,"selector":"uid:built-in"}},"speaking":false,"target":{"available":true,"label":"ivory lynx","pane":"%531"},"voice_on":true}"#
+    #"{"contract_version":2,"listener_running":true,"listener_state":"ready","microphone":{"state":"ready","reason":"capture_active","selector":"uid:built-in","device":{"index":0,"name":"Built-in Microphone","uid":"built-in","serial":null,"supports_stable_selector":true,"selector":"uid:built-in"}},"speaking":false,"target":{"available":true,"label":"ivory lynx","pane":"%531"},"voice_on":true}"#
 
   let status = try ParleySnapshot.decode(Data(json.utf8))
 

@@ -26,6 +26,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 import wave
 from pathlib import Path
@@ -431,6 +432,57 @@ def rms(chunk):
     return int((sum(s * s for s in samples) / len(samples)) ** 0.5)
 
 
+class _CaptureErrorCollector:
+    """Continuously drain untrusted stderr, retaining only a bounded prefix."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.buffer = bytearray()
+        self.thread = threading.Thread(target=self._drain, daemon=True)
+        self.thread.start()
+
+    def _drain(self):
+        while True:
+            try:
+                chunk = self.stream.read(4096)
+            except (OSError, ValueError):
+                return
+            if not chunk:
+                return
+            remaining = microphone.MAX_BACKEND_ERROR_BYTES - len(self.buffer)
+            if remaining > 0:
+                self.buffer.extend(chunk[:remaining])
+
+    def finish(self):
+        self.thread.join(timeout=2)
+        return bytes(self.buffer)
+
+
+def _reap_capture(process):
+    """Close every pipe and reap ffmpeg on EOF, cancellation, and failure."""
+    try:
+        try:
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+        except OSError:
+            try:
+                process.wait(timeout=2)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    finally:
+        for stream_name in ("stdout", "stderr"):
+            stream = getattr(process, stream_name, None)
+            try:
+                if stream:
+                    stream.close()
+            except (AttributeError, OSError):
+                pass
+
+
 def bursts(device="0", reserve_output=True):
     """Yield (frames, was_playing) per speech burst, plus idle heartbeats.
 
@@ -464,15 +516,12 @@ def bursts(device="0", reserve_output=True):
     provisional_turn = False
     since_beat = 0.0
     capture_ready = False
+    error_collector = _CaptureErrorCollector(process.stderr)
     try:
         while True:
             chunk = process.stdout.read(FRAME * 2)
             if not chunk:
-                error_stream = getattr(process, "stderr", None)
-                raw_error = (
-                    error_stream.read(microphone.MAX_BACKEND_ERROR_BYTES)
-                    if error_stream else b""
-                )
+                raw_error = error_collector.finish()
                 state, reason = microphone.classify_capture_error(raw_error)
                 microphone.write_status(state, reason, device, selected)
                 return
@@ -521,7 +570,7 @@ def bursts(device="0", reserve_output=True):
     finally:
         if provisional_turn:
             player.resume()
-        process.terminate()
+        _reap_capture(process)
 
 
 def run(device="0"):
@@ -533,6 +582,10 @@ def run(device="0"):
         raise SystemExit("could not download the wake-word model")
 
     config.STATE.mkdir(parents=True, exist_ok=True)
+    # Invalidate prior frame evidence before publishing this process as the
+    # listener. The composed runtime contract will add birth-qualified writers;
+    # this ordering also prevents a reused PID from reviving the prior run here.
+    microphone.write_status("unknown", "checking", device, pid=os.getpid())
     LISTEN_PID.write_text(str(os.getpid()))
     set_listener_state("ready")
     config.log(f"listening wake={WAKE!r} send={SEND!r} device={device}")

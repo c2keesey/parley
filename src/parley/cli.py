@@ -86,7 +86,7 @@ def build_parser():
     listen = sub.add_parser("listen", help="hands-free voice input")
     listen.add_argument("state", nargs="?", choices=["on", "off", "status", "run"])
     listen.add_argument("--device", default=microphone.configured_selector(),
-                        help="avfoundation audio device index, name, uid, or serial")
+                        help="avfoundation index, name, or advertised stable UID")
 
     mic = sub.add_parser("mic", help="inspect microphone status without capturing")
     mic.add_argument("action", nargs="?", choices=["status", "devices"],

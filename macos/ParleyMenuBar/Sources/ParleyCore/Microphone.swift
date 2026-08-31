@@ -36,6 +36,7 @@ public struct ParleyMicrophoneDevice: Codable, Equatable, Sendable, Identifiable
   public let name: String
   public let uid: String?
   public let serial: String?
+  public let supportsStableSelector: Bool
   public let selector: String
 
   public init(
@@ -43,12 +44,14 @@ public struct ParleyMicrophoneDevice: Codable, Equatable, Sendable, Identifiable
     name: String,
     uid: String?,
     serial: String?,
+    supportsStableSelector: Bool,
     selector: String
   ) {
     self.index = index
     self.name = name
     self.uid = uid
     self.serial = serial
+    self.supportsStableSelector = supportsStableSelector
     self.selector = selector
   }
 
@@ -124,7 +127,7 @@ public enum ParleyMicrophoneRecovery {
     case .denied:
       "Review \(systemSettingsPane), then retry the listener."
     case .unavailable:
-      "Choose an available microphone below. Stable device IDs avoid future index drift."
+      "Choose an available microphone below. Parley will reject later identity drift."
     case .busy:
       "Release the microphone in the other application, then retry."
     case .ready:

@@ -28,9 +28,14 @@ transcripts, trigger features, credentials, or raw AVFoundation/ffmpeg errors.
 
 `parley mic devices` asks AVFoundation through ffmpeg for device metadata only.
 It does not record audio or request permission. Device names, current indices,
-stable IDs, and USB serial selectors may be displayed locally so the user can
-choose the intended input after a device disappears or indices change. No
-diagnostic sends any of this data over the network.
+and backend-provided stable ID or USB serial metadata may be displayed locally
+so the user can choose the intended input after a device disappears or indices
+change. No diagnostic sends any of this data over the network.
+
+Stable selectors are offered only when the installed ffmpeg AVFoundation
+backend explicitly advertises support. Otherwise Parley displays the current
+index and device name, then rejects a later identity change rather than claiming
+that an index is stable.
 
 ## What leaves the Mac
 
