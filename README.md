@@ -283,14 +283,15 @@ where a dictated message is typed back. It also means this works under an agent
 that exposes no session id at all.
 
 Utterances become files in a spool directory named by nanosecond timestamp.
-Automatic blocks carry a fixed-size opaque owner token and cancellation
-generation inside the private queue item; the active block publishes the same
-bounded metadata in a private state file. Tokens contain no pane name, session
-name, transcript, or reply content. Queue items from older versions have no
-owner and remain playable; target-scoped Off preserves them, while explicit
-global Stop removes them. Any process may enqueue; exactly one drains, chosen
-by an exclusive `flock`. That is what makes overlap impossible rather than
-merely unlikely.
+Automatic blocks carry a fresh random, fixed-size opaque owner token and a
+cancellation generation inside the private queue item; the active block
+publishes the same bounded metadata in a private state file. Tokens contain no
+pane name, session name, transcript, or reply content and are rotated when a
+target is turned off and back on. Queue items from older versions have no owner
+and remain playable; target-scoped Off preserves them, while explicit global
+Stop removes them. Any process may enqueue; exactly one drains, chosen by an
+exclusive `flock`. That is what makes overlap impossible rather than merely
+unlikely.
 
 Playback starts with six-tenths of a second of silence, because Bluetooth
 headphones take about that long to switch profiles and will otherwise swallow

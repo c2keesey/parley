@@ -195,6 +195,9 @@ def test_target_cancel_preserves_other_owner_legacy_manual_and_order(recorder):
     assert remaining == ["b one", "legacy manual", "b two"]
     assert player._interrupt_token() == interrupt
     assert player._skip_token() == skip
+    cancellation = config.CANCELLATIONS / OWNER_A
+    assert stat.S_IMODE(config.CANCELLATIONS.stat().st_mode) == 0o700
+    assert stat.S_IMODE(cancellation.stat().st_mode) == 0o600
 
     player.drain()
 
@@ -253,6 +256,7 @@ def test_cancel_active_owner_during_synthesis_continues_other_target(
     assert OWNER_A in active
     assert "a active private block" not in active
     assert stat.S_IMODE(config.ACTIVE.stat().st_mode) == 0o600
+    assert stat.S_IMODE(config.STATE.stat().st_mode) == 0o700
     assert player.cancel(OWNER_A)
     release_synthesis.set()
     thread.join(timeout=3)
@@ -262,13 +266,117 @@ def test_cancel_active_owner_during_synthesis_continues_other_target(
     assert not config.ACTIVE.exists()
 
 
+def test_cancel_during_microphone_wait_preserves_other_target(monkeypatch):
+    from parley import cues
+
+    entered_wait = threading.Event()
+    synthesized_b = threading.Event()
+    played = []
+    original_wait = player._wait_for_microphone
+
+    def tracked_wait(interrupt=None):
+        active = json.loads(config.ACTIVE.read_text())
+        if active.get("owner") == OWNER_A:
+            entered_wait.set()
+        return original_wait(interrupt)
+
+    def synthesize(text, voice, model, provider):
+        if text == "b after microphone turn":
+            synthesized_b.set()
+        return text.encode()
+
+    monkeypatch.setattr(player, "_wait_for_microphone", tracked_wait)
+    monkeypatch.setattr(player, "synthesize", synthesize)
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(cues, "play", lambda name: None)
+    monkeypatch.setattr(
+        player,
+        "play",
+        lambda audio, interrupt=None, skip=None: played.append(audio.decode()),
+    )
+    player.pause()
+    player.enqueue("a waiting for microphone", owner=OWNER_A)
+    player.enqueue("b after microphone turn", owner=OWNER_B)
+    thread = threading.Thread(target=player.drain)
+    thread.start()
+    assert entered_wait.wait(timeout=2)
+
+    assert player.cancel(OWNER_A)
+    assert synthesized_b.wait(timeout=2)
+    assert played == []
+    player.resume()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert played == ["b after microphone turn"]
+
+
+def test_cancel_during_playback_preserves_other_target(monkeypatch):
+    from parley import cues
+
+    launched = []
+    first_started = threading.Event()
+    first_stopped = threading.Event()
+    synthesized = []
+
+    class Process:
+        def __init__(self):
+            self.pid = 8000 + len(launched)
+            self.terminated = False
+            launched.append(self)
+
+        def terminate(self):
+            self.terminated = True
+            if self is launched[0]:
+                first_stopped.set()
+
+        def wait(self):
+            if self is launched[0]:
+                first_started.set()
+                assert first_stopped.wait(timeout=2)
+            return -player.signal.SIGTERM if self.terminated else 0
+
+    def synthesize(text, voice, model, provider):
+        synthesized.append(text)
+        return text.encode()
+
+    def fake_kill(pid, sig):
+        if sig == 0 and pid == os.getpid():
+            return
+        for process in launched:
+            if process.pid == pid and sig == player.signal.SIGTERM:
+                process.terminate()
+                return
+        if sig == 0:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(player, "synthesize", synthesize)
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(cues, "play", lambda name: None)
+    monkeypatch.setattr(player.subprocess, "Popen", lambda argv: Process())
+    monkeypatch.setattr(player.os, "kill", fake_kill)
+    player.enqueue("a playing", owner=OWNER_A)
+    player.enqueue("b still plays", owner=OWNER_B)
+    thread = threading.Thread(target=player.drain)
+    thread.start()
+    assert first_started.wait(timeout=2)
+
+    assert player.cancel(OWNER_A)
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert synthesized == ["a playing", "b still plays"]
+    assert len(launched) == 2
+    assert launched[0].terminated
+    assert not launched[1].terminated
+
+
 def test_cancel_pending_owner_does_not_interrupt_other_active_target(monkeypatch):
     config.private_write(
         config.ACTIVE,
         json.dumps({
             "owner": OWNER_A,
             "owner_revision": player.owner_revision(OWNER_A),
-            "pid": os.getpid(),
         }),
     )
     config.SPEECH_PID.write_text("4242")
@@ -278,6 +386,7 @@ def test_cancel_pending_owner_does_not_interrupt_other_active_target(monkeypatch
     def fake_kill(pid, sig):
         signals.append((pid, sig))
 
+    monkeypatch.setattr(player, "_pid_alive", lambda path: True)
     monkeypatch.setattr(player.os, "kill", fake_kill)
 
     assert player.cancel(OWNER_B)
@@ -351,18 +460,33 @@ def test_stale_active_owner_is_cleaned_without_signaling_audio(monkeypatch):
         json.dumps({
             "owner": OWNER_A,
             "owner_revision": "",
-            "pid": 999999,
         }),
     )
     config.SPEECH_PID.write_text("4242")
     signals = []
+    checked = []
 
-    def fake_kill(pid, sig):
-        if pid == 999999 and sig == 0:
-            raise ProcessLookupError
-        signals.append((pid, sig))
+    monkeypatch.setattr(
+        player,
+        "_pid_alive",
+        lambda path: checked.append(path) or False,
+    )
+    monkeypatch.setattr(
+        player.os, "kill", lambda pid, sig: signals.append((pid, sig)))
 
-    monkeypatch.setattr(player.os, "kill", fake_kill)
+    assert not player.cancel(OWNER_A)
+
+    assert signals == []
+    assert checked == [config.DRAIN_PID]
+    assert not config.ACTIVE.exists()
+
+
+def test_corrupt_active_metadata_never_signals_speech(monkeypatch):
+    config.private_write(config.ACTIVE, "{not valid json")
+    config.SPEECH_PID.write_text("4242")
+    signals = []
+    monkeypatch.setattr(
+        player.os, "kill", lambda pid, sig: signals.append((pid, sig)))
 
     assert not player.cancel(OWNER_A)
 

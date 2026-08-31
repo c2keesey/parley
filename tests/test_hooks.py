@@ -1,4 +1,6 @@
+import hashlib
 import json
+import stat
 from types import SimpleNamespace
 
 import pytest
@@ -87,13 +89,47 @@ def test_target_aliases_share_one_bounded_opaque_owner(monkeypatch):
     assert hooks.OWNER_PATTERN.fullmatch(owners[0])
     assert "%42" not in owners[0]
     assert "private-thread-title" not in owners[0]
+    assert stat.S_IMODE(config.SESSIONS.stat().st_mode) == 0o700
+    assert all(
+        stat.S_IMODE((config.SESSIONS / key).stat().st_mode) == 0o600
+        for key in keys
+    )
 
     hooks.turn_off([keys[0]])
 
     assert not any((config.SESSIONS / key).exists() for key in keys)
 
 
-def test_empty_legacy_marker_gets_stable_non_content_owner():
+def test_fresh_targets_get_unrelated_random_owners_and_rearming_rotates(
+        monkeypatch):
+    values = iter(["1" * 32, "2" * 32, "3" * 32])
+    monkeypatch.setattr(hooks.secrets, "token_hex", lambda size: next(values))
+    first_keys = ["pane-first", "id-first"]
+    second_keys = ["pane-second", "id-second"]
+
+    hooks.turn_on(first_keys)
+    first_owner = hooks.session_owner(first_keys)
+    hooks.turn_on(second_keys)
+    second_owner = hooks.session_owner(second_keys)
+
+    assert first_owner == "owner-" + "1" * 32
+    assert second_owner == "owner-" + "2" * 32
+    assert first_owner != second_owner
+    assert first_owner != (
+        "owner-" + hashlib.sha256(first_keys[0].encode()).hexdigest()[:32]
+    )
+    assert second_owner != (
+        "owner-" + hashlib.sha256(second_keys[0].encode()).hexdigest()[:32]
+    )
+
+    hooks.turn_off([first_keys[0]])
+    hooks.turn_on(first_keys)
+
+    assert hooks.session_owner(first_keys) == "owner-" + "3" * 32
+    assert hooks.session_owner(first_keys) != first_owner
+
+
+def test_empty_legacy_marker_hashes_only_until_next_turn_on(monkeypatch):
     config.SESSIONS.mkdir(parents=True)
     (config.SESSIONS / "pane-_42").touch()
 
@@ -102,6 +138,38 @@ def test_empty_legacy_marker_gets_stable_non_content_owner():
 
     assert first == second
     assert hooks.OWNER_PATTERN.fullmatch(first)
+    assert first == (
+        "owner-" + hashlib.sha256(b"pane-_42").hexdigest()[:32]
+    )
+
+    monkeypatch.setattr(hooks.secrets, "token_hex", lambda size: "f" * 32)
+    hooks.turn_on(["pane-_42"])
+
+    assert hooks.session_owner(["pane-_42"]) == "owner-" + "f" * 32
+
+
+def test_turning_off_unarmed_target_preserves_other_empty_legacy_marker():
+    config.SESSIONS.mkdir(parents=True)
+    legacy = config.SESSIONS / "pane-legacy"
+    legacy.touch()
+
+    hooks.turn_off(["pane-never-armed"])
+
+    assert legacy.exists()
+
+
+def test_corrupt_nonempty_marker_is_not_turned_into_correlatable_owner(
+        monkeypatch):
+    config.SESSIONS.mkdir(parents=True)
+    marker = config.SESSIONS / "pane-corrupt"
+    marker.write_text("pane name accidentally persisted")
+
+    assert hooks.session_owner(["pane-corrupt"]) == ""
+
+    monkeypatch.setattr(hooks.secrets, "token_hex", lambda size: "e" * 32)
+    hooks.turn_on(["pane-corrupt"])
+
+    assert marker.read_text() == "owner-" + "e" * 32
 
 
 def test_reply_read_from_a_direct_message():

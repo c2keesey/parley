@@ -262,18 +262,20 @@ def _job_cancelled(job):
 def _set_active(job):
     owner = job.get("owner") if _valid_owner(job.get("owner")) else None
     revision = str(job.get("owner_revision", "")) if owner else ""
-    active = {"owner": owner, "owner_revision": revision, "pid": os.getpid()}
+    active = {"owner": owner, "owner_revision": revision}
     _atomic_private_write(config.ACTIVE, json.dumps(active, separators=(",", ":")))
 
 
 def _active_job():
     try:
         active = json.loads(config.ACTIVE.read_text())
-        pid = int(active["pid"])
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError):
         config.ACTIVE.unlink(missing_ok=True)
         return None
-    if not _pid_alive_value(pid):
+    # Keep liveness behind the existing path-based validator. The accepted
+    # PID-safety work can harden that single seam without a competing raw-PID
+    # contract here.
+    if not _pid_alive(config.DRAIN_PID):
         config.ACTIVE.unlink(missing_ok=True)
         config.log("recovered stale active ownership metadata")
         return None
@@ -292,12 +294,7 @@ def _active_cancelled():
 
 
 def _clear_active():
-    try:
-        active = json.loads(config.ACTIVE.read_text())
-        if int(active.get("pid", -1)) == os.getpid():
-            config.ACTIVE.unlink(missing_ok=True)
-    except (OSError, ValueError, TypeError):
-        pass
+    config.ACTIVE.unlink(missing_ok=True)
 
 
 def _interrupt_token():
@@ -314,20 +311,13 @@ def _skip_token():
         return ""
 
 
-def _pid_alive_value(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
 def _pid_alive(path):
     try:
         pid = int(path.read_text().strip())
+        os.kill(pid, 0)
+        return True
     except (OSError, ValueError):
         return False
-    return _pid_alive_value(pid)
 
 
 def microphone_active():

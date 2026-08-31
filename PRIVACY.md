@@ -9,9 +9,10 @@ Parley-operated backend.
 - Personalized trigger matching. Enrollment keeps raw recordings in memory and
   saves only normalized acoustic feature arrays under `~/.parley/triggers`.
 - Session routing, notification cues, and playback coordination.
-- Fixed-size opaque ownership tokens used to cancel only one target's queued
-  or active automatic speech. They do not contain pane names, session names,
-  transcripts, or reply text.
+- Fresh random, fixed-size opaque ownership tokens used to cancel only one
+  target's queued or active automatic speech. They do not contain pane names,
+  session names, transcripts, or reply text and rotate when a target is turned
+  off and back on.
 - Operational logs. Logs contain timestamps, cue names, provider errors,
   timing, byte counts, and message lengths—not dictated or spoken message text.
 

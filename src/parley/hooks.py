@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -119,13 +120,7 @@ def is_on(keys):
     return any((config.SESSIONS / k).exists() for k in keys)
 
 
-def session_owner(keys):
-    """A private, fixed-size queue owner shared by a target's aliases.
-
-    New markers contain the opaque owner so pane and harness-session aliases
-    resolve to one cancellation scope. Empty markers from earlier releases
-    remain usable through a deterministic, non-content fallback.
-    """
+def _stored_owner(keys):
     for key in keys:
         try:
             owner = (config.SESSIONS / key).read_text().strip()
@@ -133,17 +128,39 @@ def session_owner(keys):
             continue
         if OWNER_PATTERN.fullmatch(owner):
             return owner
-    identity = next(
-        (key for key in keys if (config.SESSIONS / key).exists()),
-        keys[0] if keys else "default",
-    )
+    return ""
+
+
+def _empty_legacy_key(keys):
+    for key in keys:
+        try:
+            if (config.SESSIONS / key).read_text().strip() == "":
+                return key
+        except OSError:
+            continue
+    return ""
+
+
+def session_owner(keys):
+    """The private queue owner recorded for a target's aliases.
+
+    Empty markers from earlier releases have no stored owner. Hash only that
+    legacy marker identity so an immediate Off can still address work already
+    associated with it. Fresh targets get random owners in turn_on().
+    """
+    owner = _stored_owner(keys)
+    if owner:
+        return owner
+    identity = _empty_legacy_key(keys)
+    if not identity:
+        return ""
     digest = hashlib.sha256(identity.encode()).hexdigest()[:32]
     return f"owner-{digest}"
 
 
 def turn_on(keys):
     config.private_directory(config.SESSIONS)
-    owner = session_owner(keys)
+    owner = _stored_owner(keys) or f"owner-{secrets.token_hex(16)}"
     for key in keys:
         config.private_write(config.SESSIONS / key, owner)
     cutoff = time.time() - 7 * 86400
@@ -163,6 +180,8 @@ def turn_off(keys):
     # aliases. Remove every alias, including identities absent from the shell
     # that invoked Off. Empty legacy markers cannot be linked safely and are
     # removed only when explicitly present in keys.
+    if not OWNER_PATTERN.fullmatch(owner):
+        return
     try:
         markers = list(config.SESSIONS.iterdir())
     except OSError:
