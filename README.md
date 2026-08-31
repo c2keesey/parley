@@ -311,8 +311,8 @@ The version 1 fields are deliberately small and operational:
 - `queue.depth`, plus independent `speech.synthesis` and `speech.playback`
   states. Playback becomes `paused` in the same generation that the listener
   takes a microphone turn.
-- A target kind, tmux pane id, and live availability bit. Session labels are
-  resolved for display and are not persisted.
+- A target kind, bounded tmux pane id, and live availability bit. Session
+  labels are neither displayed nor persisted.
 - Configured/active provider identity and a bounded provider-fallback marker.
 - Up to eight recent errors made only from allow-listed component, stage,
   provider, and error-code values.

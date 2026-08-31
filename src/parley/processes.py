@@ -112,6 +112,7 @@ def _locked(path):
     config.private_directory(path.parent)
     lock_path = path.parent / ".ownership.lock"
     descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.chmod(lock_path, 0o600)
     lock = os.fdopen(descriptor, "r+")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)

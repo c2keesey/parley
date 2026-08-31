@@ -106,3 +106,14 @@ def test_process_records_and_locks_are_private_under_permissive_umask(
     assert mode(marker.parent) == 0o700
     assert mode(marker) == 0o600
     assert mode(marker.parent / ".ownership.lock") == 0o600
+
+
+def test_process_lock_repairs_an_existing_permissive_mode(tmp_path, monkeypatch):
+    marker = tmp_path / "state" / "owners" / "listener.json"
+    monkeypatch.setattr(processes, "process_identity", lambda pid: BIRTH)
+    ownership = processes.claim(marker, 42, "listener")
+    lock = marker.parent / ".ownership.lock"
+    lock.chmod(0o666)
+
+    assert processes.owned(marker, "listener") == ownership
+    assert mode(lock) == 0o600
