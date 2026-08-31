@@ -181,7 +181,7 @@ def test_reused_listener_pid_recovers_state_without_signaling(monkeypatch):
     births[4242] = "unrelated-reused-birth"
     killed = []
     monkeypatch.setattr(
-        listen.os, "kill", lambda pid, signal: killed.append((pid, signal))
+        processes.os, "kill", lambda pid, signal: killed.append((pid, signal))
     )
 
     assert listen.listener_state() == "ready"
@@ -952,6 +952,7 @@ def test_start_succeeds_only_for_nonce_bound_live_capture(monkeypatch):
             "status": "ready",
             "pid": process.pid,
             "token": token,
+            "birth": f"test-birth:{process.pid}",
             "message": "",
         }) + "\n").encode())
         return process
@@ -985,6 +986,7 @@ def test_start_rejects_wrong_nonce_and_pid_as_stale_readiness(monkeypatch):
             "status": "ready",
             "pid": process.pid + 1,
             "token": "stale-token",
+            "birth": f"test-birth:{process.pid + 1}",
             "message": "",
         }) + "\n").encode())
         return process
@@ -999,9 +1001,10 @@ def test_start_rejects_wrong_nonce_and_pid_as_stale_readiness(monkeypatch):
 
 def test_stale_reused_pid_without_owner_lock_is_not_running(
         tmp_path, monkeypatch):
-    owner = {"pid": 41001, "token": "old-token"}
-    listen.config.private_write(listen.LISTEN_PID, json.dumps(owner))
-    monkeypatch.setattr(listen, "_pid_is_owned", lambda pid, token="": True)
+    births = {41001: "original-birth"}
+    monkeypatch.setattr(processes, "process_identity", births.get)
+    assert processes.claim(listen.LISTEN_PID, 41001, "listener") is not None
+    births[41001] = "reused-birth"
     monkeypatch.setattr(listen, "_lock_is_held", lambda: False)
 
     assert listen.is_running() == 0
@@ -1014,7 +1017,7 @@ def test_slow_old_shutdown_times_out_before_replacement_launch(monkeypatch):
         listen,
         "stop",
         lambda: (_ for _ in ()).throw(listen.ListenerStartupError(
-            "Listener PID 77 did not release the microphone within 4 seconds; "
+            "Listener did not release the microphone within 4 seconds; "
             "replacement was not started."
         )),
     )
@@ -1030,14 +1033,13 @@ def test_slow_old_shutdown_times_out_before_replacement_launch(monkeypatch):
 
 
 def test_unverified_lock_owner_is_never_signalled(monkeypatch):
-    listen.config.private_write(
-        listen.LISTEN_PID,
-        json.dumps({"pid": 41001, "token": "owner-token"}),
-    )
+    births = {41001: "original-birth"}
+    monkeypatch.setattr(processes, "process_identity", births.get)
+    assert processes.claim(listen.LISTEN_PID, 41001, "listener") is not None
+    births[41001] = "reused-birth"
     monkeypatch.setattr(listen, "_lock_is_held", lambda: True)
-    monkeypatch.setattr(listen, "_pid_is_owned", lambda pid, token="": False)
     monkeypatch.setattr(
-        listen.os,
+        processes.os,
         "kill",
         lambda pid, signal: pytest.fail("unverified PID must not be signalled"),
     )
@@ -1070,4 +1072,4 @@ def test_listener_logs_metadata_not_recognized_or_dictated_content(
     persisted = " ".join(logs)
     assert "my private recognized room speech" not in persisted
     assert "private words" not in persisted
-    assert "heard chars=" in persisted
+    assert "local transcription chars=" in persisted

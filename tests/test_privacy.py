@@ -58,10 +58,15 @@ def test_listener_logs_metadata_without_recognized_or_dictated_text(
     monkeypatch.setattr(listen, "ensure_model", lambda: True)
     monkeypatch.setattr(listen.indicator, "ensure", lambda: None)
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
-    monkeypatch.setattr(listen, "bursts", lambda device: iter([
-        ([b"wake"], False),
-        ([b"send"], False),
-    ]))
+    def bursts(device, on_ready=None):
+        if on_ready is not None:
+            on_ready()
+        return iter([
+            ([b"wake"], False),
+            ([b"send"], False),
+        ])
+
+    monkeypatch.setattr(listen, "bursts", bursts)
     monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
     monkeypatch.setattr(
         listen,

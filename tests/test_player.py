@@ -138,7 +138,7 @@ def test_local_aiff_audio_is_written_with_the_right_extension(monkeypatch):
         "Popen",
         lambda argv: launched.append(argv) or Process(),
     )
-    monkeypatch.setattr(player.os, "kill", lambda pid, signal: None)
+    monkeypatch.setattr(processes.os, "kill", lambda pid, signal: None)
 
     player.play(b"FORM local aiff")
 
@@ -178,7 +178,7 @@ def test_skip_current_preserves_queue_and_global_interrupt(monkeypatch):
     killed = []
     own(config.SPEECH_PID, 4242, "speech")
     monkeypatch.setattr(
-        player.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+        processes.os, "kill", lambda pid, sig: killed.append((pid, sig)))
     player.enqueue("current response")
     interrupt = player._interrupt_token()
 
@@ -277,7 +277,7 @@ def test_interrupting_playback_suppresses_the_done_chime(monkeypatch):
 def test_stop_terminates_the_active_audio_process(monkeypatch):
     killed = []
     own(config.SPEECH_PID, 4242, "speech")
-    monkeypatch.setattr(player.os, "kill", lambda pid, signal: killed.append(
+    monkeypatch.setattr(processes.os, "kill", lambda pid, signal: killed.append(
         (pid, signal)))
 
     player.stop()
@@ -290,7 +290,7 @@ def test_stop_never_signals_historical_pidfile_entries(monkeypatch):
     config.PIDFILE.write_text("41001\n41002\n")
     killed = []
     monkeypatch.setattr(
-        player.os, "kill", lambda pid, signal: killed.append((pid, signal))
+        processes.os, "kill", lambda pid, signal: killed.append((pid, signal))
     )
 
     player.stop()
@@ -306,7 +306,7 @@ def test_reused_speech_pid_is_recovered_without_a_signal(monkeypatch):
     births[4242] = "unrelated-reused-birth"
     killed = []
     monkeypatch.setattr(
-        player.os, "kill", lambda pid, signal: killed.append((pid, signal))
+        processes.os, "kill", lambda pid, signal: killed.append((pid, signal))
     )
 
     assert not player.skip()
@@ -434,7 +434,7 @@ def test_pause_preserves_queue_and_resume_keeps_interrupt_token(monkeypatch):
     signals = []
     own(config.SPEECH_PID, 4242, "speech")
     monkeypatch.setattr(
-        player.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+        processes.os, "kill", lambda pid, sig: signals.append((pid, sig)))
     player.enqueue("current response")
     interrupt = player._interrupt_token()
 
@@ -484,7 +484,7 @@ def test_explicit_stop_discards_paused_and_queued_speech(monkeypatch):
     killed = []
     own(config.SPEECH_PID, 4242, "speech")
     monkeypatch.setattr(
-        player.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+        processes.os, "kill", lambda pid, sig: killed.append((pid, sig)))
     player.pause()
     player.enqueue("this must be discarded")
 
@@ -523,7 +523,7 @@ def test_microphone_turn_opening_during_audio_launch_restarts_new_process(
 
     monkeypatch.setattr(
         player.subprocess, "Popen", lambda *args, **kwargs: Process())
-    monkeypatch.setattr(player.os, "kill", kill)
+    monkeypatch.setattr(processes.os, "kill", kill)
     monkeypatch.setattr(player, "_remaining_audio", lambda path, offset: path)
 
     assert player.play(b"audio", player._interrupt_token())
@@ -556,7 +556,7 @@ def test_paused_playback_restarts_remaining_audio_after_send(monkeypatch):
 
     monkeypatch.setattr(
         player.subprocess, "Popen", lambda *args, **kwargs: Process())
-    monkeypatch.setattr(player.os, "kill", lambda pid, sig: (
+    monkeypatch.setattr(processes.os, "kill", lambda pid, sig: (
         launched[-1].terminate() if sig == player.signal.SIGTERM else None))
     monkeypatch.setattr(
         player, "_remaining_audio",
@@ -615,7 +615,7 @@ def test_stale_microphone_turn_recovers_paused_speech(monkeypatch):
             raise ProcessLookupError
         signals.append((pid, sig))
 
-    monkeypatch.setattr(player.os, "kill", kill)
+    monkeypatch.setattr(processes.os, "kill", kill)
 
     assert not player.microphone_active()
     assert not config.MIC_TURN.exists()

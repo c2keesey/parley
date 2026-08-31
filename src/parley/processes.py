@@ -166,27 +166,78 @@ def claim_in(directory, pid, kind):
     return claim(path, pid, kind)
 
 
-def owned_pid(path, kind=None):
-    """Return a proven owned PID and recover invalid, exited, or reused state."""
+def owned(path, kind=None):
+    """Return proven ownership and recover invalid, exited, or reused state."""
     path = Path(path)
     with _locked(path):
         ownership = _read(path)
         if (ownership is not None
                 and (kind is None or ownership.kind == kind)
                 and process_identity(ownership.pid) == ownership.birth):
-            return ownership.pid
+            return ownership
         path.unlink(missing_ok=True)
+    return None
+
+
+def owned_pid(path, kind=None):
+    """Return a proven owned PID for display/status, never for signaling."""
+    ownership = owned(path, kind)
+    if ownership is not None:
+        return ownership.pid
     return 0
 
 
 def owned_pids(directory, kind=None):
-    """Return live owned PIDs while pruning every stale marker encountered."""
+    """Return live owned PIDs for display/status while pruning stale markers."""
     directory = Path(directory)
     try:
         markers = list(directory.glob("*.json"))
     except OSError:
         return []
     return [pid for marker in markers if (pid := owned_pid(marker, kind))]
+
+
+def send_signal(target, sig, kind=None):
+    """Signal only a still-current, birth-qualified ownership record.
+
+    ``target`` may be a path or a previously read ``Ownership`` capability.
+    The record and kernel birth identity are both revalidated while the
+    ownership lock is held, immediately before the only stored-PID signal site
+    in Parley. A replaced capability can therefore never signal its successor.
+    """
+    expected = target if isinstance(target, Ownership) else None
+    path = expected.path if expected is not None else Path(target)
+    with _locked(path):
+        current = _read(path)
+        if (current is None
+                or (expected is not None and current != expected)
+                or (kind is not None and current.kind != kind)
+                or process_identity(current.pid) != current.birth):
+            if expected is None or current == expected:
+                path.unlink(missing_ok=True)
+            return False
+        # Recheck at the signal boundary so an identity change observed after
+        # record validation fails closed without invoking os.kill.
+        if process_identity(current.pid) != current.birth:
+            path.unlink(missing_ok=True)
+            return False
+        try:
+            os.kill(current.pid, sig)
+        except OSError:
+            if process_identity(current.pid) != current.birth:
+                path.unlink(missing_ok=True)
+            return False
+    return True
+
+
+def signal_all(directory, sig, kind=None):
+    """Signal each independently birth-qualified child marker in a directory."""
+    directory = Path(directory)
+    try:
+        markers = list(directory.glob("*.json"))
+    except OSError:
+        return 0
+    return sum(bool(send_signal(marker, sig, kind)) for marker in markers)
 
 
 def release(ownership):

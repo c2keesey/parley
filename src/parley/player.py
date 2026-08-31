@@ -235,14 +235,7 @@ def _wait_for_microphone(interrupt=None):
 
 
 def _signal_speech(sig):
-    pid = processes.owned_pid(config.SPEECH_PID, "speech")
-    if pid:
-        try:
-            os.kill(pid, sig)
-            return True
-        except OSError:
-            processes.clear(config.SPEECH_PID)
-    return False
+    return processes.send_signal(config.SPEECH_PID, sig, "speech")
 
 
 def pause():
@@ -366,11 +359,7 @@ def stop():
         item.unlink(missing_ok=True)
     _signal_speech(signal.SIGTERM)
     processes.clear(config.SPEECH_PID)
-    for pid in processes.owned_pids(config.CUE_PROCESSES, "cue"):
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
+    processes.signal_all(config.CUE_PROCESSES, signal.SIGTERM, "cue")
     # Never trust PID-only state written by older Parley versions.
     config.PIDFILE.unlink(missing_ok=True)
 

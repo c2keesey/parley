@@ -601,6 +601,7 @@ def _claim_listener_lock():
         ) from exc
     return handle
 
+
 def _lock_is_held():
     config.private_directory(LISTEN_LOCK.parent)
     handle = open(LISTEN_LOCK, "a+")
@@ -615,70 +616,14 @@ def _lock_is_held():
     return False
 
 
-def _read_owner():
-    try:
-        raw = LISTEN_PID.read_text().strip()
-    except OSError:
-        return None
-    try:
-        payload = json.loads(raw)
-        pid = int(payload["pid"])
-        token = str(payload["token"])
-        if pid > 0:
-            return {"pid": pid, "token": token, "legacy": not token}
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        pass
-    try:
-        pid = int(raw)
-        return {"pid": pid, "token": "", "legacy": True} if pid > 0 else None
-    except ValueError:
-        return None
-
-
-def _write_owner(token):
-    config.private_write(
-        LISTEN_PID,
-        json.dumps({"pid": os.getpid(), "token": token}, separators=(",", ":")),
-    )
-
-
-def _owner_matches(owner):
-    current = _read_owner()
-    return bool(
-        current
-        and current["pid"] == owner["pid"]
-        and current["token"] == owner["token"]
-    )
-
-
-def _pid_is_owned(pid, token=""):
-    """Verify a PID is still a listener before it is ever signalled."""
-    try:
-        os.kill(pid, 0)
-        result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
-            capture_output=True, text=True, timeout=2, check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    command = result.stdout.strip()
-    if result.returncode != 0 or "listen" not in command or "run" not in command:
-        return False
-    return not token or ("--owner-token" in command and token in command)
-
-
-def _cleanup_owner(owner):
-    if _owner_matches(owner):
-        LISTEN_PID.unlink(missing_ok=True)
-
-
-def _send_startup(fd, status, token, message=""):
+def _send_startup(fd, status, token, birth="", message=""):
     if fd is None:
         return
     payload = {
         "status": status,
         "pid": os.getpid(),
         "token": token,
+        "birth": birth,
         "message": message,
     }
     try:
@@ -695,14 +640,15 @@ def _send_startup(fd, status, token, message=""):
 def run(device="0", owner_token="", ready_fd=None):
     """The listening loop. Runs until killed."""
     lock = None
-    owner = {"pid": os.getpid(), "token": owner_token, "legacy": not owner_token}
+    ownership = None
     startup_fd = ready_fd
     startup_sent = False
     previous_sigterm = None
 
     def announce(status, message=""):
         nonlocal startup_fd, startup_sent
-        _send_startup(startup_fd, status, owner_token, message)
+        birth = ownership.birth if ownership is not None else ""
+        _send_startup(startup_fd, status, owner_token, birth, message)
         startup_fd = None
         startup_sent = True
 
@@ -719,7 +665,10 @@ def run(device="0", owner_token="", ready_fd=None):
             # Tests or embedders may invoke run() outside the main thread.
             previous_sigterm = None
         lock = _claim_listener_lock()
-        _write_owner(owner_token)
+        ownership = processes.claim(LISTEN_PID, os.getpid(), "listener")
+        if ownership is None:
+            raise ListenerStartupError(
+                "Listener process ownership could not be verified.")
         if not whisper_bin():
             raise ListenerStartupError(
                 "whisper-cli not found. Install it with: brew install whisper-cpp")
@@ -729,7 +678,7 @@ def run(device="0", owner_token="", ready_fd=None):
         if not ensure_model():
             raise ListenerStartupError("could not download the wake-word model")
 
-        config.log(f"listening wake={WAKE!r} send={SEND!r} device={device}")
+        config.log(f"listener started device={device}")
         personalized_active = triggers.enrolled()
         if personalized_active:
             config.log("personalized triggers active")
@@ -748,11 +697,11 @@ def run(device="0", owner_token="", ready_fd=None):
             try:
                 try:
                     spoken = transcribe_cloud(frames)
-                except Exception as exc:
-                    config.log(f"transcription failed: {exc}")
+                except Exception:
+                    config.log("transcription failed")
                     return
                 message = strip_phrase(strip_wake_phrases(spoken), SEND)
-                config.log(f"message chars={len(message)}")
+                config.log(f"message transcribed chars={len(message)}")
                 if message:
                     inject(message)
             finally:
@@ -895,12 +844,11 @@ def run(device="0", owner_token="", ready_fd=None):
         if not startup_sent:
             announce("error", str(exc))
         raise SystemExit(str(exc)) from exc
-    except BaseException as exc:
+    except BaseException:
         if not startup_sent:
-            detail = str(exc).strip() or type(exc).__name__
             announce(
                 "error",
-                f"Listener crashed before microphone capture was ready: {detail}",
+                "Listener crashed before microphone capture was ready.",
             )
         raise
     finally:
@@ -910,7 +858,7 @@ def run(device="0", owner_token="", ready_fd=None):
             player.resume()
         if startup_fd is not None:
             announce("error", "Listener exited before microphone capture was ready.")
-        _cleanup_owner(owner)
+        processes.release(ownership)
         config.LISTENER_STATE.unlink(missing_ok=True)
         if lock is not None:
             try:
@@ -923,24 +871,12 @@ def run(device="0", owner_token="", ready_fd=None):
 
 
 def is_running():
-    owner = _read_owner()
-    if not owner:
-        return 0
-    if owner["legacy"]:
-        if _pid_is_owned(owner["pid"]):
-            return owner["pid"]
-        _cleanup_owner(owner)
-        return 0
-    if _lock_is_held() and _pid_is_owned(owner["pid"], owner["token"]):
-        return owner["pid"]
-    if not _lock_is_held():
-        _cleanup_owner(owner)
-    return 0
+    return processes.owned_pid(LISTEN_PID, "listener")
 
 
 def stop(timeout=SHUTDOWN_TIMEOUT):
-    owner = _read_owner()
-    if not owner:
+    ownership = processes.owned(LISTEN_PID, "listener")
+    if ownership is None:
         if _lock_is_held():
             raise ListenerStartupError(
                 "A listener owns the microphone, but its PID ownership record "
@@ -951,43 +887,24 @@ def stop(timeout=SHUTDOWN_TIMEOUT):
         player.resume()
         return False
 
-    lock_held = _lock_is_held()
-    owned = _pid_is_owned(owner["pid"], owner["token"])
-    if not owned:
-        if lock_held:
+    if not processes.send_signal(ownership, signal.SIGTERM):
+        if _lock_is_held() and processes.owned(LISTEN_PID, "listener") is not None:
             raise ListenerStartupError(
-                f"PID {owner['pid']} holds the listener lock but ownership could "
-                "not be verified. Refusing to signal it."
-            )
-        _cleanup_owner(owner)
-        config.LISTENER_STATE.unlink(missing_ok=True)
-        indicator.refresh()
-        player.resume()
+                "Could not stop the verified listener process.")
         return False
-
-    try:
-        os.kill(owner["pid"], 15)
-    except OSError as exc:
-        if _pid_is_owned(owner["pid"], owner["token"]):
-            raise ListenerStartupError(
-                f"Could not stop listener PID {owner['pid']}: {exc}") from exc
 
     deadline = time.monotonic() + timeout
     while True:
-        still_owned = (
-            _pid_is_owned(owner["pid"], owner["token"])
-            if owner["legacy"] else _lock_is_held()
-        )
-        if not still_owned:
+        if not _lock_is_held():
             break
         if time.monotonic() >= deadline:
             raise ListenerStartupError(
-                f"Listener PID {owner['pid']} did not release the microphone "
+                "Listener did not release the microphone "
                 f"within {timeout:g} seconds; replacement was not started."
             )
         time.sleep(0.05)
 
-    _cleanup_owner(owner)
+    processes.release(ownership)
     config.LISTENER_STATE.unlink(missing_ok=True)
     indicator.refresh()
     player.resume()
@@ -1027,6 +944,13 @@ def _wait_for_startup(process, read_fd, token, timeout):
                 if payload.get("status") != "ready":
                     raise ListenerStartupError(
                         payload.get("message") or "Listener startup failed.")
+                birth = payload.get("birth")
+                if (not isinstance(birth, str) or not birth
+                        or processes.process_identity(process.pid) != birth):
+                    raise ListenerStartupError(
+                        "Listener startup birth identity could not be verified; "
+                        "refusing to report it as active."
+                    )
                 return process.pid
         code = process.poll()
         if code is not None:
@@ -1046,6 +970,14 @@ def _terminate_child(process):
         return
     try:
         process.terminate()
+        process.wait(timeout=1)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    except (ChildProcessError, ProcessLookupError):
+        return
+    try:
+        process.kill()
         process.wait(timeout=1)
     except (OSError, subprocess.SubprocessError):
         pass
