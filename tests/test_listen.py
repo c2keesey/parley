@@ -1,6 +1,6 @@
 import pytest
 
-from parley import listen
+from parley import listen, microphone
 from parley.listen import (
     contains_phrase,
     contains_wake,
@@ -23,6 +23,12 @@ def isolate_microphone_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(listen.config, "TRIGGERS", tmp_path / "triggers")
     listen.triggers.load.cache_clear()
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+    monkeypatch.setattr(
+        microphone,
+        "prepare_capture",
+        lambda device: microphone.MicrophoneDevice(0, "Mock Mic", "mock-uid"),
+    )
+    monkeypatch.setattr(microphone, "write_status", lambda *args, **kwargs: None)
 
 
 @pytest.mark.parametrize("heard", [
@@ -190,6 +196,34 @@ class FakeAudioProcess:
 
     def terminate(self):
         pass
+
+
+class FakeErrorStream:
+    def __init__(self, content):
+        self.content = content
+
+    def read(self, size):
+        return self.content[:size]
+
+
+def test_capture_failure_is_classified_without_logging_backend_text(monkeypatch):
+    process = FakeAudioProcess([])
+    process.stderr = FakeErrorStream(
+        b"AVFoundation audio device access is denied: private backend suffix"
+    )
+    statuses = []
+    logs = []
+    monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(
+        microphone,
+        "write_status",
+        lambda state, reason, *args, **kwargs: statuses.append((state, reason)),
+    )
+    monkeypatch.setattr(listen.config, "log", logs.append)
+
+    assert list(listen.bursts()) == []
+    assert statuses[-1] == ("denied", "permission_denied")
+    assert all("private backend suffix" not in item for item in logs)
 
 
 def audio_chunks(voiced_frames):

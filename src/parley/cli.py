@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from parley import __version__, config, hooks
+from parley import __version__, config, hooks, microphone
 from parley.player import detach, drain, enqueue, stop
 
 
@@ -34,14 +34,16 @@ def _status_snapshot():
 
     pane = listener.get_target() or os.environ.get("TMUX_PANE", "")
     label = indicator.session_label(pane) if pane else ""
-    listener_running = bool(listener.is_running())
+    listener_pid = listener.is_running()
+    listener_running = bool(listener_pid)
     return {
-        "contract_version": 1,
+        "contract_version": 2,
         "listener_running": listener_running,
         "listener_state": (
             listener.listener_state() if listener_running else "off"
         ),
         "speaking": listener.speaking(),
+        "microphone": microphone.public_status(listener_pid),
         "target": {
             "available": bool(label),
             "label": label or None,
@@ -83,8 +85,13 @@ def build_parser():
 
     listen = sub.add_parser("listen", help="hands-free voice input")
     listen.add_argument("state", nargs="?", choices=["on", "off", "status", "run"])
-    listen.add_argument("--device", default=os.environ.get("PARLEY_MIC", "0"),
-                        help="avfoundation audio device index")
+    listen.add_argument("--device", default=microphone.configured_selector(),
+                        help="avfoundation audio device index, name, uid, or serial")
+
+    mic = sub.add_parser("mic", help="inspect microphone status without capturing")
+    mic.add_argument("action", nargs="?", choices=["status", "devices"],
+                     default="status")
+    mic.add_argument("--json", action="store_true")
 
     enroll = sub.add_parser(
         "enroll", help="record a local personalized trigger profile")
@@ -141,6 +148,51 @@ def main(argv=None):
         print("Regenerated: " + ", ".join(sorted(cues.PATTERNS)))
         return
 
+    if command == "mic":
+        if args.action == "devices":
+            try:
+                devices = microphone.enumerate_devices()
+            except microphone.DeviceDiscoveryUnavailable:
+                if args.json:
+                    print(json.dumps({
+                        "contract_version": microphone.CONTRACT_VERSION,
+                        "devices": [],
+                        "available": False,
+                    }, sort_keys=True))
+                else:
+                    print(
+                        "Microphone device discovery is unavailable.",
+                        file=sys.stderr,
+                    )
+                raise SystemExit(1)
+            if args.json:
+                print(json.dumps({
+                    "contract_version": microphone.CONTRACT_VERSION,
+                    "devices": [item.public() for item in devices],
+                    "available": True,
+                }, sort_keys=True))
+            elif devices:
+                for item in devices:
+                    print(f"{item.selector}  {item.name}  (current index {item.index})")
+                print("Select one with: parley listen on --device SELECTOR")
+            else:
+                print("No microphone input devices are available.")
+            return
+
+        from parley import listen as listener
+
+        status = microphone.public_status(listener.is_running())
+        if args.json:
+            print(json.dumps({
+                "contract_version": microphone.CONTRACT_VERSION,
+                "microphone": status,
+            }, sort_keys=True))
+        else:
+            print(f"microphone: {status['state']} — {microphone.status_text(status)}")
+            print(f"  {microphone.recovery_text(status)}")
+            print(f"  selected {status['selector']}")
+        return
+
     if command == "default":
         config.STATE.mkdir(parents=True, exist_ok=True)
         if args.state == "on":
@@ -181,6 +233,13 @@ def main(argv=None):
         if state == "status":
             pid = listener.is_running()
             print(f"listening: {'on (pid ' + str(pid) + ')' if pid else 'off'}")
+            mic_status = microphone.public_status(pid)
+            print(
+                f"  microphone {mic_status['state']} — "
+                f"{microphone.status_text(mic_status)}"
+            )
+            if mic_status["state"] != "ready":
+                print(f"  recovery {microphone.recovery_text(mic_status)}")
             if pid:
                 print(f"  state {listener.listener_state()}")
                 print(
@@ -213,7 +272,26 @@ def main(argv=None):
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True)
         time.sleep(0.6)
-        print(f"listening: on — say {listener.WAKE!r}, speak, then {listener.SEND!r}")
+        deadline = time.time() + 6
+        mic_status = microphone.public_status(listener.is_running())
+        while mic_status["state"] == "unknown" and time.time() < deadline:
+            time.sleep(0.1)
+            mic_status = microphone.public_status(listener.is_running())
+        if mic_status["state"] in {"denied", "unavailable", "busy", "failed"}:
+            print(
+                f"listening: unavailable — {microphone.status_text(mic_status)}",
+                file=sys.stderr,
+            )
+            print(microphone.recovery_text(mic_status), file=sys.stderr)
+            raise SystemExit(1)
+        if mic_status["state"] == "ready":
+            print(
+                f"listening: on — say {listener.WAKE!r}, speak, "
+                f"then {listener.SEND!r}"
+            )
+        else:
+            print("listening: starting — microphone capture is not yet confirmed")
+            print(f"  {microphone.recovery_text(mic_status)}")
         print(f"  typing into pane {pane}")
         return
 

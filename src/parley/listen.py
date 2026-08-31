@@ -30,7 +30,7 @@ import time
 import wave
 from pathlib import Path
 
-from parley import config, cues, indicator, player, triggers
+from parley import config, cues, indicator, microphone, player, triggers
 
 RATE = 16000
 FRAME = 1024
@@ -443,24 +443,46 @@ def bursts(device="0", reserve_output=True):
     A (None, False) heartbeat is yielded about once a second so timeouts can
     fire during silence, when no burst would ever arrive.
     """
-    ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
-    process = subprocess.Popen(
-        [ffmpeg, "-hide_banner", "-loglevel", "error",
-         "-f", "avfoundation", "-i", f":{device}",
-         "-ac", "1", "-ar", str(RATE), "-f", "s16le", "-"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        selected = microphone.prepare_capture(device)
+    except microphone.CaptureUnavailable as exc:
+        microphone.write_status(exc.state, exc.reason, device, exc.device)
+        return
+    microphone.write_status("unknown", "checking", device, selected)
+    try:
+        process = subprocess.Popen(
+            microphone.capture_command(device),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        microphone.write_status("failed", "capture_failed", device, selected)
+        return
     frame_seconds = FRAME / RATE
     buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
     provisional_turn = False
     since_beat = 0.0
+    capture_ready = False
     try:
         while True:
             chunk = process.stdout.read(FRAME * 2)
             if not chunk:
+                error_stream = getattr(process, "stderr", None)
+                raw_error = (
+                    error_stream.read(microphone.MAX_BACKEND_ERROR_BYTES)
+                    if error_stream else b""
+                )
+                state, reason = microphone.classify_capture_error(raw_error)
+                microphone.write_status(state, reason, device, selected)
                 return
+            if not capture_ready:
+                capture_ready = True
+                microphone.write_status("ready", "capture_active", device, selected)
             since_beat += frame_seconds
             if since_beat >= 1.0:
                 since_beat = 0.0
+                microphone.write_status("ready", "capture_active", device, selected)
                 yield None, False
             if rms(chunk) > SPEECH_RMS:
                 # A reply can finish synthesizing after the user starts the
@@ -694,6 +716,11 @@ def stop():
             pass
     LISTEN_PID.unlink(missing_ok=True)
     config.LISTENER_STATE.unlink(missing_ok=True)
+    try:
+        microphone.write_status(
+            "unknown", "not_checked", microphone.configured_selector(), pid=0)
+    except (OSError, ValueError):
+        pass
     indicator.refresh()
     player.resume()
     return bool(pid)
