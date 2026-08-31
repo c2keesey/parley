@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import hmac
 import json
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
@@ -26,12 +28,31 @@ EXECUTABLE = "ParleyMenuBar"
 BUNDLE_NAME = f"{EXECUTABLE}.app"
 BUNDLE_IDENTIFIER = "com.chriskeesey.parley.menubar"
 CONTRACT_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 1
 SUPPORTED_ARCHITECTURES = ("arm64", "x86_64")
-VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+VERSION_PATTERN = re.compile(
+    r"^(?:0|[1-9][0-9]{0,3})\."
+    r"(?:0|[1-9][0-9]?)\."
+    r"(?:0|[1-9][0-9]?)$"
+)
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 class ReleaseError(RuntimeError):
     """A safe, user-facing release validation failure."""
+
+
+@dataclass(frozen=True)
+class ReleaseManifest:
+    version: str
+    bundle_version: str
+    architectures: tuple[str, ...]
+    signature: str
+    notarized: bool
+    artifact: str
+    sha256: str
+    commit: str
 
 
 def child_environment() -> dict[str, str]:
@@ -68,14 +89,20 @@ def output(command: list[str]) -> str:
     return run(command, capture=True).stdout.strip()
 
 
+def validate_bundle_version(version: object) -> str:
+    if not isinstance(version, str) or not VERSION_PATTERN.fullmatch(version):
+        raise ReleaseError(
+            "version must be a legal numeric CFBundleVersion in MAJOR.MINOR.PATCH form"
+        )
+    return version
+
+
 def project_version(repo_dir: Path = REPO_DIR) -> str:
     import tomllib
 
     with (repo_dir / "pyproject.toml").open("rb") as handle:
         version = tomllib.load(handle)["project"]["version"]
-    if not isinstance(version, str) or not VERSION_PATTERN.fullmatch(version):
-        raise ReleaseError(f"unsupported project version: {version!r}")
-    return version
+    return validate_bundle_version(version)
 
 
 def validate_version(expected: str, actual: str) -> None:
@@ -487,6 +514,7 @@ def write_release_metadata(
     architectures: tuple[str, ...],
     signature: str,
     commit: str,
+    notarized: bool,
 ) -> tuple[Path, Path]:
     digest = sha256(archive)
     checksum = archive.with_suffix(f"{archive.suffix}.sha256")
@@ -495,11 +523,13 @@ def write_release_metadata(
     values = {
         "architectures": list(architectures),
         "artifact": archive.name,
+        "bundle_version": version,
         "bundle_identifier": BUNDLE_IDENTIFIER,
         "cli_distribution": f"parley-voice=={version}",
         "commit": commit,
         "contract_version": CONTRACT_VERSION,
-        "schema_version": 1,
+        "notarized": notarized,
+        "schema_version": MANIFEST_SCHEMA_VERSION,
         "sha256": digest,
         "signature": signature,
         "version": version,
@@ -508,6 +538,135 @@ def write_release_metadata(
         json.dumps(values, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return checksum, manifest
+
+
+def read_release_manifest(manifest_path: Path) -> ReleaseManifest:
+    try:
+        values = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ReleaseError(f"invalid release manifest JSON: {error.msg}") from error
+    required = {
+        "architectures",
+        "artifact",
+        "bundle_identifier",
+        "bundle_version",
+        "cli_distribution",
+        "commit",
+        "contract_version",
+        "notarized",
+        "schema_version",
+        "sha256",
+        "signature",
+        "version",
+    }
+    if not isinstance(values, dict) or set(values) != required:
+        raise ReleaseError("release manifest fields do not match schema 1")
+    if (
+        type(values["schema_version"]) is not int
+        or values["schema_version"] != MANIFEST_SCHEMA_VERSION
+    ):
+        raise ReleaseError("unsupported release manifest schema version")
+    if (
+        type(values["contract_version"]) is not int
+        or values["contract_version"] != CONTRACT_VERSION
+    ):
+        raise ReleaseError("release manifest has an unsupported contract version")
+
+    version = validate_bundle_version(values["version"])
+    bundle_version = validate_bundle_version(values["bundle_version"])
+    if bundle_version != version:
+        raise ReleaseError("release manifest bundle version does not match version")
+    if values["bundle_identifier"] != BUNDLE_IDENTIFIER:
+        raise ReleaseError("release manifest bundle identifier is incompatible")
+    if values["cli_distribution"] != f"parley-voice=={version}":
+        raise ReleaseError("release manifest CLI distribution does not match version")
+
+    raw_architectures = values["architectures"]
+    if not isinstance(raw_architectures, list) or not all(
+        isinstance(item, str) for item in raw_architectures
+    ):
+        raise ReleaseError("release manifest architectures must be a string array")
+    architectures = validate_architectures(raw_architectures)
+    if list(architectures) != raw_architectures:
+        raise ReleaseError("release manifest architectures are not canonical")
+
+    signature = values["signature"]
+    if not isinstance(signature, str) or signature not in {"ad-hoc", "developer-id"}:
+        raise ReleaseError("release manifest has an unsupported signature type")
+    notarized = values["notarized"]
+    if type(notarized) is not bool:
+        raise ReleaseError("release manifest notarized value must be boolean")
+    if notarized and signature != "developer-id":
+        raise ReleaseError("an ad-hoc release manifest cannot claim notarization")
+
+    expected_artifact = f"{artifact_stem(version, architectures, signature)}.zip"
+    artifact = values["artifact"]
+    if (
+        not isinstance(artifact, str)
+        or artifact != expected_artifact
+        or Path(artifact).name != artifact
+    ):
+        raise ReleaseError("release manifest artifact name does not match its claims")
+    if manifest_path.name != f"{Path(artifact).stem}.json":
+        raise ReleaseError("release manifest filename does not match its artifact")
+
+    digest = values["sha256"]
+    if not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest):
+        raise ReleaseError("release manifest SHA-256 is malformed")
+    commit = values["commit"]
+    if not isinstance(commit, str) or not COMMIT_PATTERN.fullmatch(commit):
+        raise ReleaseError("release manifest commit is malformed")
+    return ReleaseManifest(
+        version=version,
+        bundle_version=bundle_version,
+        architectures=architectures,
+        signature=signature,
+        notarized=notarized,
+        artifact=artifact,
+        sha256=digest,
+        commit=commit,
+    )
+
+
+def verify_release_files(manifest_path: Path) -> tuple[ReleaseManifest, Path]:
+    manifest = read_release_manifest(manifest_path)
+    artifact = manifest_path.parent / manifest.artifact
+    checksum = artifact.with_suffix(f"{artifact.suffix}.sha256")
+    actual = verify_checksum(artifact, checksum)
+    if not hmac.compare_digest(manifest.sha256, actual):
+        raise ReleaseError("release manifest SHA-256 does not match artifact/checksum")
+    return manifest, artifact
+
+
+def publication_conflicts(output_dir: Path, stem: str) -> list[Path]:
+    candidates = [
+        output_dir / stem,
+        output_dir / f"{stem}.zip",
+        output_dir / f"{stem}.zip.sha256",
+        output_dir / f"{stem}.json",
+    ]
+    return [
+        candidate
+        for candidate in candidates
+        if candidate.exists() or candidate.is_symlink()
+    ]
+
+
+def refuse_publication_conflicts(output_dir: Path, stem: str) -> None:
+    conflicts = publication_conflicts(output_dir, stem)
+    if conflicts:
+        names = ", ".join(item.name for item in conflicts)
+        raise ReleaseError(f"refusing to overwrite existing release output: {names}")
+
+
+def publish_release_set(staged_release: Path, output_dir: Path, stem: str) -> Path:
+    lock_path = output_dir / ".parley-release.lock"
+    with lock_path.open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        refuse_publication_conflicts(output_dir, stem)
+        final_release = output_dir / stem
+        staged_release.rename(final_release)
+    return final_release
 
 
 def build_release(args: argparse.Namespace) -> None:
@@ -523,12 +682,16 @@ def build_release(args: argparse.Namespace) -> None:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = artifact_stem(actual_version, architectures, signature)
-    archive = output_dir / f"{stem}.zip"
+    refuse_publication_conflicts(output_dir, stem)
     with tempfile.TemporaryDirectory(
         prefix=".parley-release-", dir=output_dir
     ) as temporary:
         stage = Path(temporary)
-        app = assemble_app(stage, actual_version, architectures)
+        build_dir = stage / "build"
+        staged_release = stage / "release"
+        staged_release.mkdir()
+        archive = staged_release / f"{stem}.zip"
+        app = assemble_app(build_dir, actual_version, architectures)
         sign_app(app, ad_hoc=args.ad_hoc, identity=args.signing_identity)
         verify_app(
             app,
@@ -559,34 +722,47 @@ def build_release(args: argparse.Namespace) -> None:
                 gatekeeper=True,
             )
             create_deterministic_zip(app, archive, epoch)
-    checksum, manifest = write_release_metadata(
-        output_dir,
-        archive=archive,
-        version=actual_version,
-        architectures=architectures,
-        signature=signature,
-        commit=commit,
-    )
-    print(archive)
-    print(checksum)
-    print(manifest)
+        checksum, manifest_path = write_release_metadata(
+            staged_release,
+            archive=archive,
+            version=actual_version,
+            architectures=architectures,
+            signature=signature,
+            commit=commit,
+            notarized=args.notarize,
+        )
+        verify_release(manifest_path)
+        final_release = publish_release_set(staged_release, output_dir, stem)
+    print(final_release / archive.name)
+    print(final_release / checksum.name)
+    print(final_release / manifest_path.name)
+
+
+def verify_release(
+    manifest_path: Path, *, gatekeeper: bool = False, smoke_launch: bool = False
+) -> ReleaseManifest:
+    manifest, artifact = verify_release_files(manifest_path)
+    with tempfile.TemporaryDirectory(prefix="parley-verify-") as temporary:
+        app = safe_extract(artifact, Path(temporary))
+        verify_app(
+            app,
+            version=manifest.version,
+            architectures=manifest.architectures,
+            signature=manifest.signature,
+            notarized=manifest.notarized,
+            gatekeeper=manifest.notarized or gatekeeper,
+            smoke_launch=smoke_launch,
+        )
+    return manifest
 
 
 def verify_artifact(args: argparse.Namespace) -> None:
-    architectures = validate_architectures(args.architectures)
-    verify_checksum(args.artifact, args.checksum)
-    with tempfile.TemporaryDirectory(prefix="parley-verify-") as temporary:
-        app = safe_extract(args.artifact, Path(temporary))
-        verify_app(
-            app,
-            version=args.version,
-            architectures=architectures,
-            signature=args.signature,
-            notarized=args.notarized,
-            gatekeeper=args.gatekeeper,
-            smoke_launch=args.smoke_launch,
-        )
-    print(f"Verified {args.artifact.name}")
+    manifest = verify_release(
+        args.manifest,
+        gatekeeper=args.gatekeeper,
+        smoke_launch=args.smoke_launch,
+    )
+    print(f"Verified {manifest.artifact} from {args.manifest.name}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -639,16 +815,9 @@ def build_parser() -> argparse.ArgumentParser:
     app.add_argument("--smoke-launch", action="store_true")
 
     artifact = subparsers.add_parser(
-        "verify", help="verify an archived app and checksum"
+        "verify", help="verify the complete release set described by a manifest"
     )
-    artifact.add_argument("--artifact", required=True, type=Path)
-    artifact.add_argument("--checksum", required=True, type=Path)
-    artifact.add_argument("--version", required=True)
-    artifact.add_argument("--architectures", nargs="+", required=True)
-    artifact.add_argument(
-        "--signature", choices=("ad-hoc", "developer-id"), required=True
-    )
-    artifact.add_argument("--notarized", action="store_true")
+    artifact.add_argument("--manifest", required=True, type=Path)
     artifact.add_argument("--gatekeeper", action="store_true")
     artifact.add_argument("--smoke-launch", action="store_true")
     artifact.set_defaults(handler=verify_artifact)

@@ -44,10 +44,6 @@ jobs:
           version=$(macos/ParleyMenuBar/Scripts/release.py version)
           macos/ParleyMenuBar/Scripts/release.py build \
             --version "$version" --ad-hoc
-          artifact_file=".artifacts/release/ParleyMenuBar-$version-macos-universal2-adhoc.zip"
+          release_stem="ParleyMenuBar-$version-macos-universal2-adhoc"
           macos/ParleyMenuBar/Scripts/release.py verify \
-            --artifact "$artifact_file" \
-            --checksum "$artifact_file.sha256" \
-            --version "$version" \
-            --architectures arm64 x86_64 \
-            --signature ad-hoc
+            --manifest ".artifacts/release/$release_stem/$release_stem.json"

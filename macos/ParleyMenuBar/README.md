@@ -48,7 +48,9 @@ The Python distribution and native app ship with the same semantic version.
 `pyproject.toml` is the only editable version source: Python reads the installed
 distribution metadata, and both app plist version fields are rendered from it.
 The builder requires the requested version to match and refuses a dirty Git
-checkout.
+checkout. Releases currently require strict numeric `MAJOR.MINOR.PATCH`, with
+at most 4, 2, and 2 digits respectively and no leading zeroes; that same value
+is a legal `CFBundleVersion` and is used for both plist fields.
 
 Runtime compatibility is governed by `parley status --json`'s integer
 `contract_version`, not by patch-version equality. The native app rejects an
@@ -60,8 +62,9 @@ version and contract version in their JSON manifest.
 The supported release target is a universal app containing `arm64` and
 `x86_64`, with a minimum deployment target of macOS 13. The canonical artifact
 name is `ParleyMenuBar-VERSION-macos-universal2.zip`, accompanied by a
-`.zip.sha256` file and JSON manifest. This is normalized, reproducible-input
-packaging: the ZIP writer fixes entry order and timestamps to the commit time
+`.zip.sha256` file and JSON manifest in a same-stem release directory. The set
+uses normalized, reproducible-input packaging: the ZIP writer fixes entry order
+and timestamps to the commit time
 (or `SOURCE_DATE_EPOCH`) and the verifier restores and checks recorded modes.
 It is not a claim that signed output is bit-for-bit reproducible. Developer ID
 timestamp signatures and Apple's notarization ticket are intentionally
@@ -78,11 +81,23 @@ version=$(macos/ParleyMenuBar/Scripts/release.py version)
 macos/ParleyMenuBar/Scripts/release.py build \
   --version "$version" --ad-hoc
 macos/ParleyMenuBar/Scripts/release.py verify \
-  --artifact ".artifacts/release/ParleyMenuBar-$version-macos-universal2-adhoc.zip" \
-  --checksum ".artifacts/release/ParleyMenuBar-$version-macos-universal2-adhoc.zip.sha256" \
-  --version "$version" --architectures arm64 x86_64 --signature ad-hoc \
+  --manifest ".artifacts/release/ParleyMenuBar-$version-macos-universal2-adhoc/ParleyMenuBar-$version-macos-universal2-adhoc.json" \
   --smoke-launch
 ```
+
+The manifest is authoritative: verification derives the artifact name,
+version, bundle version, architectures, signature type, notarization state,
+contract version, and expected SHA-256 from its validated schema, then requires
+the sidecar and archive bytes to agree. Caller-supplied flags cannot override
+those claims.
+
+Builds keep all three files in a private temporary directory until signing,
+optional notarization, stapling, archive extraction, checksum, plist,
+architecture, and signature gates succeed. The completed directory is then
+renamed into place atomically. Existing same-name directories or legacy
+top-level outputs are never replaced; the builder refuses before compiling, so
+reruns require an explicitly different output directory or manual archival of
+the prior result.
 
 `--smoke-launch` directly starts the archived executable, confirms it remains
 running, and terminates it; it does not install the app. Ad-hoc artifacts are
