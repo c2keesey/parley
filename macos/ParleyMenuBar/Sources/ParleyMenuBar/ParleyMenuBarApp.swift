@@ -24,9 +24,12 @@ struct ParleyMenuBarApp: App {
 
     Window("Parley Status", id: "status") {
       StatusWindowView(model: model)
-        .onAppear { model.start() }
+        .onAppear {
+          model.start()
+          model.refreshMicrophones()
+        }
     }
-    .defaultSize(width: 470, height: 440)
+    .defaultSize(width: 510, height: 650)
     .windowResizability(.contentSize)
   }
 }

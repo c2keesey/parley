@@ -24,5 +24,7 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 Chris Keesey</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Parley uses the microphone only while hands-free listening is on. Audio stays local until you explicitly say the send phrase.</string>
 </dict>
 </plist>

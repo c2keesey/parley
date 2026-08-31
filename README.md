@@ -112,6 +112,14 @@ credential-free `parley status --json` contract and sends controls back through
 the existing CLI, so the Python audio engine remains the only audio engine and
 the app never reads provider credentials.
 
+Microphone recovery uses that same contract. The app reports capture as ready
+only after the listener's normal ffmpeg stream delivers frames; a live listener
+PID alone is not microphone evidence. Permission denial, a missing or reindexed
+device, another app holding the device, and an unrecognized capture failure all
+remain distinct. The status window can open the Microphone privacy pane or
+explicitly restart listening with an available stable device ID, but it never
+changes permission itself.
+
 ```sh
 swift run --package-path macos/ParleyMenuBar ParleyCoreTests
 macos/ParleyMenuBar/Scripts/build-app.sh
@@ -144,8 +152,20 @@ brew install whisper-cpp     # one-time
 parley listen on       # from inside the tmux pane running the agent
 parley listen status
 parley listen off
+parley mic status      # read the last/current capture outcome; records no audio
+parley mic devices     # enumerate device metadata; opens no capture stream
 parley enroll          # optional, personalized local trigger matching
 ```
+
+`parley mic status` distinguishes `unknown`, `denied`, `unavailable`, `busy`,
+`ready`, and unexpected `failed` capture. Backend error text is never printed
+or logged; only recognized conditions are mapped, and everything else stays a
+generic failure. If a saved numeric index now points to a different device,
+Parley refuses to silently switch microphones. Choose the replacement shown by
+`parley mic devices` with `parley listen on --device uid:...`; a stable UID
+continues to identify the same device when its numeric index changes. Set the
+same non-secret selector in `PARLEY_MIC` to make it the default for new listener
+commands.
 
 Defaults: say **"okay computer"**, talk, then **"send it"**. A quiet low tone
 confirms it woke, a soft two-note cue confirms it sent, and a falling tone
@@ -228,10 +248,12 @@ send command. Pick a wake phrase you would not use in ordinary conversation.
 
 ### What it needs from you
 
-The microphone permission is granted to your **terminal application**, not to
-this tool, and it applies to everything that runs in that terminal afterwards.
-macOS will prompt the first time. Revoke it in System Settings under Privacy
-and Security, Microphone.
+macOS grants microphone permission to the application responsible for starting
+capture—normally your terminal for CLI use, or the Parley companion when you
+start listening there. macOS may prompt on the first capture attempt. Parley
+does not answer that prompt or change the setting. Review or revoke access in
+**System Settings > Privacy & Security > Microphone**, then restart the
+listener after changing it.
 
 Input is typed with `tmux send-keys` against the pane you armed it from, so
 the session must be running inside tmux. That is also why this is agent
@@ -261,7 +283,7 @@ Every knob is an environment variable.
 | `PARLEY_WAKE` | `okay computer` | phrase that starts capture |
 | `PARLEY_SEND` | `send it` | phrase that submits |
 | `PARLEY_STOP_TALKING` | `stop talking` | local interrupt used after the wake phrase during playback |
-| `PARLEY_MIC` | `0` | avfoundation input device index |
+| `PARLEY_MIC` | `0` | avfoundation input index, name, `uid:...`, or `serial:...`; stable IDs avoid index drift |
 | `PARLEY_MIC_THRESHOLD` | `500` | raise it in a noisy room |
 | `PARLEY_MIN_SPEECH` | `0.10` | minimum voiced seconds retained for trigger detection |
 | `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | cloud model when an OpenAI key exists |

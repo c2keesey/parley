@@ -7,6 +7,8 @@ final class ParleyModel: ObservableObject {
   @Published private(set) var errorMessage: String?
   @Published private(set) var isWorking = false
   @Published private(set) var lastUpdated: Date?
+  @Published private(set) var microphones: [ParleyMicrophoneDevice] = []
+  @Published private(set) var microphoneError: String?
 
   let cli: ParleyCLI
   private let client: ParleyCLIClient
@@ -57,6 +59,41 @@ final class ParleyModel: ObservableObject {
         errorMessage = error.localizedDescription
       }
       await loadStatus(showActivity: false)
+      isWorking = false
+    }
+  }
+
+  func refreshMicrophones() {
+    Task {
+      switch await client.fetchMicrophones() {
+      case .success(let inventory):
+        microphones = inventory.devices
+        microphoneError =
+          inventory.available
+          ? nil
+          : "Microphone inventory is unavailable."
+      case .failure(let error):
+        microphones = []
+        microphoneError = error.localizedDescription
+      }
+    }
+  }
+
+  func useMicrophone(_ device: ParleyMicrophoneDevice) {
+    guard let snapshot,
+      let command = ParleyCommandPlanner.listenerOn(
+        device: device.selector,
+        snapshot: snapshot
+      )
+    else { return }
+    Task {
+      isWorking = true
+      let result = await client.run(command)
+      if case .failure(let error) = result {
+        errorMessage = error.localizedDescription
+      }
+      await loadStatus(showActivity: false)
+      refreshMicrophones()
       isWorking = false
     }
   }

@@ -12,6 +12,12 @@ struct MenuContentView: View {
     if let target = model.snapshot?.target {
       Text("Target: \(target.displayName)\(target.available ? "" : " · unavailable")")
     }
+    if let microphone = model.snapshot?.microphone {
+      Label(
+        "Microphone: \(microphone.state.label)",
+        systemImage: microphone.state.systemImage
+      )
+    }
 
     Divider()
     ControlButtons(model: model)

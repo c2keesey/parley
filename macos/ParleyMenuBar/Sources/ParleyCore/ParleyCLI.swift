@@ -90,6 +90,21 @@ public actor ParleyCLIClient {
     }
   }
 
+  public func fetchMicrophones() -> Result<ParleyMicrophoneInventory, ParleyCLIError> {
+    switch execute(
+      ParleyCommand(arguments: ["mic", "devices", "--json"], timeout: 8)
+    ) {
+    case .failure(let error):
+      return .failure(error)
+    case .success(let data):
+      do {
+        return .success(try ParleyMicrophoneInventory.decode(data))
+      } catch {
+        return .failure(.invalidStatus(error.localizedDescription))
+      }
+    }
+  }
+
   public func run(_ command: ParleyCommand) -> Result<Void, ParleyCLIError> {
     execute(command).map { _ in () }
   }

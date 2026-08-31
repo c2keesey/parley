@@ -25,6 +25,20 @@ public struct ParleyCommand: Equatable, Sendable {
 }
 
 public enum ParleyCommandPlanner {
+  public static func listenerOn(
+    device selector: String,
+    snapshot: ParleySnapshot
+  ) -> ParleyCommand? {
+    guard snapshot.target.available, let pane = snapshot.target.pane else {
+      return nil
+    }
+    return ParleyCommand(
+      arguments: ["listen", "on", "--device", selector],
+      environment: ["TMUX_PANE": pane],
+      timeout: 30
+    )
+  }
+
   public static func command(
     for control: ParleyControl,
     snapshot: ParleySnapshot

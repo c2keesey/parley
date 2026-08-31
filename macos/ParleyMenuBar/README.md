@@ -4,8 +4,9 @@ A native SwiftUI control surface over the existing Parley CLI.
 
 ## Architecture
 
-- `ParleyCore` decodes the versioned local JSON snapshot, derives one of seven
-  visual states, and maps enabled controls to existing CLI arguments.
+- `ParleyCore` decodes the versioned local JSON snapshot, derives operational
+  and microphone recovery states, and maps enabled controls to existing CLI
+  arguments.
 - `ParleyMenuBar` owns the `MenuBarExtra`, status window, one-second polling,
   keyboard shortcuts, and VoiceOver descriptions.
 - `ParleyCLIClient` launches only the `parley` executable. Status has a
@@ -13,10 +14,15 @@ A native SwiftUI control surface over the existing Parley CLI.
   decoded as data rather than evaluated as shell input.
 - Target-bound controls pass only `TMUX_PANE` to the child process. The app
   neither imports Python code nor discovers speech-provider credentials.
+- Microphone inventory comes from `parley mic devices --json`, which enumerates
+  metadata without opening capture. Selecting a device explicitly starts the
+  listener with its stable selector. The app never records diagnostic audio,
+  changes permission, or displays raw capture-backend errors.
 
 The process boundary is intentionally narrow. `parley status --json` returns
-only process liveness, listener state, speech activity, target identity, and
-per-target voice state. Existing human-readable CLI output is unchanged.
+only process liveness, listener state, allow-listed microphone capture outcome,
+selected device metadata, speech activity, target identity, and per-target
+voice state. Capture readiness comes from fresh listener evidence, not a PID.
 
 ## Build and test
 

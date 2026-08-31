@@ -16,6 +16,22 @@ Before a wake phrase is accepted, short speech bursts may be processed by the
 local recognizer and are then discarded. Once capture begins, audio is held in
 memory until the turn is sent, cancelled, or expires.
 
+## Microphone diagnostics
+
+`parley mic status`, the native status window, and the menu bar poll do not open
+a capture stream. They read a bounded local outcome written by the normal
+listener: unknown, denied, unavailable, busy, ready, or unexpected failure.
+Ready means that the active capture stream delivered frames; it is never
+inferred from process liveness. The status contains only the selected device's
+non-secret metadata and an allow-listed state/reason. It never contains audio,
+transcripts, trigger features, credentials, or raw AVFoundation/ffmpeg errors.
+
+`parley mic devices` asks AVFoundation through ffmpeg for device metadata only.
+It does not record audio or request permission. Device names, current indices,
+stable IDs, and USB serial selectors may be displayed locally so the user can
+choose the intended input after a device disappears or indices change. No
+diagnostic sends any of this data over the network.
+
 ## What leaves the Mac
 
 - On the explicit send command, captured dictation audio is sent to OpenAI's

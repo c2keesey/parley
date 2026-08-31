@@ -20,6 +20,7 @@ public struct ParleySnapshot: Codable, Equatable, Sendable {
   public let contractVersion: Int
   public let listenerRunning: Bool
   public let listenerState: String
+  public let microphone: ParleyMicrophoneStatus
   public let speaking: Bool
   public let target: ParleyTarget
   public let voiceOn: Bool
@@ -28,6 +29,7 @@ public struct ParleySnapshot: Codable, Equatable, Sendable {
     contractVersion: Int,
     listenerRunning: Bool,
     listenerState: String,
+    microphone: ParleyMicrophoneStatus,
     speaking: Bool,
     target: ParleyTarget,
     voiceOn: Bool
@@ -35,6 +37,7 @@ public struct ParleySnapshot: Codable, Equatable, Sendable {
     self.contractVersion = contractVersion
     self.listenerRunning = listenerRunning
     self.listenerState = listenerState
+    self.microphone = microphone
     self.speaking = speaking
     self.target = target
     self.voiceOn = voiceOn
@@ -44,7 +47,7 @@ public struct ParleySnapshot: Codable, Equatable, Sendable {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     let snapshot = try decoder.decode(ParleySnapshot.self, from: data)
-    guard snapshot.contractVersion == 1 else {
+    guard snapshot.contractVersion == 2 else {
       throw ParleyContractError.unsupportedVersion(snapshot.contractVersion)
     }
     return snapshot
@@ -53,11 +56,14 @@ public struct ParleySnapshot: Codable, Equatable, Sendable {
 
 public enum ParleyContractError: Error, Equatable, LocalizedError, Sendable {
   case unsupportedVersion(Int)
+  case unsupportedMicrophoneVersion(Int)
 
   public var errorDescription: String? {
     switch self {
     case .unsupportedVersion(let version):
       "Unsupported Parley status contract version \(version)."
+    case .unsupportedMicrophoneVersion(let version):
+      "Unsupported Parley microphone contract version \(version)."
     }
   }
 }
@@ -115,6 +121,36 @@ public struct ParleyPresentation: Equatable, Sendable {
         state: .degraded,
         detail: "Listener target \(snapshot.target.pane ?? "is missing") is unavailable."
       )
+    }
+
+    switch snapshot.microphone.state {
+    case .denied:
+      return ParleyPresentation(
+        state: .error,
+        detail: "Microphone permission denied. Parley cannot grant access."
+      )
+    case .unavailable:
+      return ParleyPresentation(
+        state: .degraded,
+        detail: "Selected microphone unavailable or reindexed."
+      )
+    case .busy:
+      return ParleyPresentation(
+        state: .degraded,
+        detail: "Selected microphone is busy in another application."
+      )
+    case .failed:
+      return ParleyPresentation(
+        state: .error,
+        detail: "Microphone capture failed unexpectedly."
+      )
+    case .unknown where snapshot.listenerRunning:
+      return ParleyPresentation(
+        state: .degraded,
+        detail: "Listener started; microphone capture is not yet confirmed."
+      )
+    case .unknown, .ready:
+      break
     }
 
     switch snapshot.listenerState {

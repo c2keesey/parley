@@ -2,7 +2,22 @@ import ParleyCore
 
 func runCommandTests() throws {
   try testMapsSafeControlsToExistingCLICommands()
+  try testMapsExplicitDeviceRecoveryToStableSelector()
   try testDisablesControlsThatAreUnsafeOrAlreadySatisfied()
+}
+
+private func testMapsExplicitDeviceRecoveryToStableSelector() throws {
+  let off = makeSnapshot(running: false, speaking: false, voiceOn: false)
+
+  try expect(
+    ParleyCommandPlanner.listenerOn(device: "uid:stable-mic", snapshot: off)
+      == ParleyCommand(
+        arguments: ["listen", "on", "--device", "uid:stable-mic"],
+        environment: ["TMUX_PANE": "%7"],
+        timeout: 30
+      ),
+    "device recovery should retain target context and stable selector"
+  )
 }
 
 private func testMapsSafeControlsToExistingCLICommands() throws {
@@ -73,9 +88,15 @@ private func makeSnapshot(
   targetAvailable: Bool = true
 ) -> ParleySnapshot {
   ParleySnapshot(
-    contractVersion: 1,
+    contractVersion: 2,
     listenerRunning: running,
     listenerState: running ? "ready" : "off",
+    microphone: ParleyMicrophoneStatus(
+      state: running ? .ready : .unknown,
+      reason: running ? "capture_active" : "not_checked",
+      selector: "0",
+      device: nil
+    ),
     speaking: speaking,
     target: ParleyTarget(
       available: targetAvailable,
