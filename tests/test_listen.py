@@ -1135,3 +1135,18 @@ def test_listener_logs_metadata_not_recognized_or_dictated_content(
     assert "my private recognized room speech" not in persisted
     assert "private words" not in persisted
     assert "local transcription chars=" in persisted
+
+
+def test_listener_log_never_exposes_caller_controlled_device_selector(monkeypatch):
+    logs = []
+    selector = "/private/device path named Secret Microphone"
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/mock/whisper-cli")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", ready_bursts([]))
+    monkeypatch.setattr(listen.config, "log", logs.append)
+
+    listen.run(device=selector)
+
+    assert logs[0] == "listener started"
+    assert selector not in " ".join(logs)

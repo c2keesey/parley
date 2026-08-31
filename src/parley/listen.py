@@ -692,7 +692,7 @@ def run(device="0", owner_token="", ready_fd=None):
         if not ensure_model():
             raise ListenerStartupError("could not download the wake-word model")
 
-        config.log(f"listener started device={device}")
+        config.log("listener started")
         personalized_active = triggers.enrolled()
         if personalized_active:
             config.log("personalized triggers active")
