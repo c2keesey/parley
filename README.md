@@ -124,9 +124,9 @@ active pane has Parley turned on:
 capturing dictation, `⏳ PARLEY SENDING` during transcription and submission,
 and `🔊 PARLEY SPEAKING · MIC READY` during spoken output. It disappears if the
 listener stops or crashes. The receiving pane says `THIS PANE`; another
-Parley-enabled pane shows `⚠ SENDS TO <name>` so a stale target cannot look
-like a dead microphone. Panes where Parley is off stay uncluttered. `parley
-listen status` reports the target name together with the raw pane id.
+Parley-enabled pane shows `⚠ SENDS TO %<pane>` so a stale target cannot look
+like a dead microphone without exposing a session label. Panes where Parley is
+off stay uncluttered. `parley listen status` reports only the bounded pane id.
 
 ```sh
 brew install whisper-cpp     # one-time

@@ -64,12 +64,11 @@ def text(viewing_pane=""):
     if viewing_pane and not hooks.pane_is_on(viewing_pane):
         return ""
     pane = snapshot["target"]["id"] or ""
-    _target_session, label = _session(pane)
     if viewing_pane and pane == viewing_pane:
         target = " · THIS PANE"
         warning = ""
-    elif label:
-        target = f" · SENDS TO {label}"
+    elif snapshot["target"]["available"] and pane:
+        target = f" · SENDS TO {pane}"
         warning = "⚠ " if viewing_pane else ""
     else:
         target = f" · TARGET {pane or '(none)'} UNAVAILABLE"

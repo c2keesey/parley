@@ -92,13 +92,9 @@ def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
             "target": {"id": "%531", "available": True},
         },
     )
-    monkeypatch.setattr(listen.triggers, "enrolled", lambda: True)
-    monkeypatch.setattr(
-        listen.indicator, "session_label", lambda pane: "ivory-lynx")
-
     cli.main(["listen", "status"])
 
-    assert "sends to ivory-lynx (pane %531)" in capsys.readouterr().out
+    assert "sends to pane %531" in capsys.readouterr().out
 
 
 def test_status_reports_sanitized_speech_failure(tmp_path, monkeypatch, capsys):

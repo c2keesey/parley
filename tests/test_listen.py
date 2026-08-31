@@ -268,7 +268,7 @@ def test_click_sized_burst_remains_below_speech_gate(monkeypatch):
     actual = [burst for burst, _ in listen.bursts() if burst is not None]
 
     assert actual == []
-    assert logs == ["gate ignored short audio voiced=0.06s"]
+    assert logs == ["gate ignored short audio"]
 
 
 def test_capture_child_is_reaped_before_microphone_stream_returns(monkeypatch):
@@ -295,6 +295,37 @@ def test_capture_child_is_reaped_before_microphone_stream_returns(monkeypatch):
 
     assert list(listen.bursts()) == []
     assert actions == ["terminate", "wait"]
+
+
+def test_capture_readiness_is_announced_only_after_first_frame(monkeypatch):
+    reads = []
+    ready_after_reads = []
+
+    class Output:
+        def __init__(self):
+            self.chunks = iter([b"\x00\x00" * listen.FRAME, b""])
+
+        def read(self, size):
+            reads.append(size)
+            return next(self.chunks)
+
+    class Capture:
+        stdout = Output()
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: Capture())
+
+    list(listen.bursts(on_ready=lambda: ready_after_reads.append(len(reads))))
+
+    assert ready_after_reads == [1]
 
 
 def test_missing_ffmpeg_fails_before_capture_is_spawned(monkeypatch):
@@ -1003,6 +1034,30 @@ def test_start_rejects_wrong_nonce_and_pid_as_stale_readiness(monkeypatch):
     with pytest.raises(
             listen.ListenerStartupError, match="ownership could not be verified"):
         listen.start("0", "%mock", "/mock/parley")
+    assert process.terminated
+
+
+def test_start_rejects_delayed_ready_from_reused_birth(monkeypatch):
+    _stub_start_prerequisites(monkeypatch)
+    process = FakeListenerProcess()
+
+    def launch(command, **kwargs):
+        token = command[command.index("--owner-token") + 1]
+        ready_fd = kwargs["pass_fds"][0]
+        os.write(ready_fd, (json.dumps({
+            "status": "ready",
+            "pid": process.pid,
+            "token": token,
+            "birth": "linux:00000000-0000-0000-0000-000000000000:old",
+            "message": "",
+        }) + "\n").encode())
+        return process
+
+    monkeypatch.setattr(listen.subprocess, "Popen", launch)
+
+    with pytest.raises(
+            listen.ListenerStartupError, match="birth identity could not be verified"):
+        listen.start("0", "%42", "/mock/parley")
     assert process.terminated
 
 

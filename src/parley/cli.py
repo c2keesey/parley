@@ -190,9 +190,8 @@ def main(argv=None):
             if running:
                 print(f"  state {state_text}")
                 pane = status["target"]["id"] or ""
-                label = listener.indicator.session_label(pane)
-                if status["target"]["available"] and label:
-                    print(f"  sends to {label} (pane {pane})")
+                if status["target"]["available"] and pane:
+                    print(f"  sends to pane {pane}")
                 else:
                     print(f"  sends to unavailable pane {pane or '(none)'}")
             return

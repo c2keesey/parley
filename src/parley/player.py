@@ -517,7 +517,5 @@ def detach(fn):
     try:
         fn()
     except Exception:
-        import traceback
-
-        config.log(traceback.format_exc())
+        config.log("detached worker failed")
     os._exit(0)

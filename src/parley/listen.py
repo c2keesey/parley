@@ -121,7 +121,7 @@ def ensure_message_model():
     if MESSAGE_MODEL.exists():
         return True
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    config.log(f"downloading local message model {MESSAGE_MODEL.name}")
+    config.log("downloading local message model")
     partial = MESSAGE_MODEL.with_suffix(".part")
     result = subprocess.run([
         "curl", "-fL", "--progress-bar", "-o", str(partial), MESSAGE_MODEL_URL
@@ -396,9 +396,10 @@ def set_target(pane):
 
 def get_target():
     try:
-        return TARGET.read_text().strip()
+        pane = TARGET.read_text().strip()
     except OSError:
         return ""
+    return pane if runtime.PANE.fullmatch(pane) else ""
 
 
 def inject(text):
@@ -586,8 +587,7 @@ def bursts(device="0", reserve_output=True, on_ready=None):
                         provisional_turn = False
                         yield buffer, overlapped
                     elif voiced >= 0.05:
-                        config.log(
-                            f"gate ignored short audio voiced={voiced:.2f}s")
+                        config.log("gate ignored short audio")
                     if provisional_turn:
                         player.resume()
                         provisional_turn = False
@@ -770,19 +770,15 @@ def run(device="0", owner_token="", ready_fd=None):
                 "wake", "stop")
             personalized = None
             if personalized_active:
-                personalized, score, threshold = triggers.match(burst, allowed)
+                personalized, _score, _threshold = triggers.match(burst, allowed)
                 if personalized:
-                    config.log(
-                        f"personalized trigger={personalized} score={score:.3f} "
-                        f"threshold={threshold:.3f}")
+                    config.log("personalized control matched")
 
             voiced_seconds = sum(
                 rms(frame) > SPEECH_RMS for frame in burst) * FRAME / RATE
             if (personalized_active and voiced_seconds < 0.16
                     and not personalized):
-                config.log(
-                    f"personalized short candidate rejected "
-                    f"voiced={voiced_seconds:.2f}s")
+                config.log("personalized short candidate rejected")
                 if not capturing:
                     player.resume()
                 continue

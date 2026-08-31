@@ -48,18 +48,16 @@ def test_indicator_surfaces_speech_error_without_response_content(monkeypatch):
 
 def test_indicator_names_the_dictation_target(monkeypatch):
     monkeypatch.setattr(runtime, "snapshot", status)
-    monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
-    assert indicator.text() == " 🎙 PARLEY READY · SENDS TO windy-falcon "
+    assert indicator.text() == " 🎙 PARLEY READY · SENDS TO %42 "
 
 
 def test_indicator_makes_current_and_wrong_session_unmistakable(monkeypatch):
     monkeypatch.setattr(runtime, "snapshot", status)
-    monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
     monkeypatch.setattr(hooks, "pane_is_on", lambda pane: True)
 
     assert indicator.text("%42") == " 🎙 PARLEY READY · THIS PANE "
     assert indicator.text("%77") == (
-        " ⚠ 🎙 PARLEY READY · SENDS TO windy-falcon "
+        " ⚠ 🎙 PARLEY READY · SENDS TO %42 "
     )
 
 
@@ -105,7 +103,7 @@ def test_real_tmux_sessions_surface_a_stale_target(monkeypatch):
             "display-message", "-p", "-t", "current-work", "#{pane_id}",
         ).stdout.strip()
         assert indicator.text(current_pane) == (
-            " ⚠ 🎙 PARLEY READY · SENDS TO old-target "
+            f" ⚠ 🎙 PARLEY READY · SENDS TO {target_pane} "
         )
 
         # The stored command keeps pane_id as a tmux format, so it follows the
@@ -123,16 +121,15 @@ def test_real_tmux_sessions_surface_a_stale_target(monkeypatch):
 
 
 def test_indicator_distinguishes_capture_send_and_speech(monkeypatch):
-    monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
     current = status(listener="capturing")
     monkeypatch.setattr(runtime, "snapshot", lambda: current)
-    assert indicator.text() == " 🔴 PARLEY LISTENING · SENDS TO windy-falcon "
+    assert indicator.text() == " 🔴 PARLEY LISTENING · SENDS TO %42 "
     current["listener"]["state"] = "sending"
-    assert indicator.text() == " ⏳ PARLEY SENDING · SENDS TO windy-falcon "
+    assert indicator.text() == " ⏳ PARLEY SENDING · SENDS TO %42 "
     current["listener"]["state"] = "ready"
     current["speech"]["playback"] = "active"
     assert indicator.text() == (
-        " 🔊 PARLEY SPEAKING · MIC READY · SENDS TO windy-falcon "
+        " 🔊 PARLEY SPEAKING · MIC READY · SENDS TO %42 "
     )
 
 
