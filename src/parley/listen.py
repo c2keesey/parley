@@ -717,8 +717,7 @@ def stop():
     LISTEN_PID.unlink(missing_ok=True)
     config.LISTENER_STATE.unlink(missing_ok=True)
     try:
-        microphone.write_status(
-            "unknown", "not_checked", microphone.configured_selector(), pid=0)
+        microphone.mark_stopped()
     except (OSError, ValueError):
         pass
     indicator.refresh()

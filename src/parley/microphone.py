@@ -245,7 +245,7 @@ def _valid_status(document):
         return False
     if document["state"] not in STATES or document["reason"] not in REASONS:
         return False
-    if not isinstance(document["selector"], str) or len(document["selector"]) > 240:
+    if not _valid_text(document["selector"], 240):
         return False
     if not isinstance(document["pid"], int) or document["pid"] < 0:
         return False
@@ -258,10 +258,19 @@ def _valid_status(document):
         isinstance(device, dict)
         and set(device) == {"index", "name", "uid", "serial", "selector"}
         and isinstance(device["index"], int)
-        and isinstance(device["name"], str)
-        and isinstance(device["selector"], str)
-        and (device["uid"] is None or isinstance(device["uid"], str))
-        and (device["serial"] is None or isinstance(device["serial"], str))
+        and _valid_text(device["name"], 120)
+        and _valid_text(device["selector"], 240)
+        and (device["uid"] is None or _valid_text(device["uid"], 240))
+        and (device["serial"] is None or _valid_text(device["serial"], 120))
+    )
+
+
+def _valid_text(value, maximum):
+    return bool(
+        isinstance(value, str)
+        and value
+        and len(value) <= maximum
+        and all(ord(char) >= 32 for char in value)
     )
 
 
@@ -326,6 +335,27 @@ def public_status(active_pid=None):
         "selector": document["selector"],
         "device": document["device"],
     }
+
+
+def mark_stopped():
+    """Mark capture inactive while retaining identity for drift detection."""
+    previous = _read_raw_status()
+    device = previous.get("device")
+    retained = None
+    if device:
+        retained = MicrophoneDevice(
+            index=device["index"],
+            name=device["name"],
+            uid=device["uid"],
+            serial=device["serial"],
+        )
+    return write_status(
+        "unknown",
+        "not_checked",
+        previous["selector"],
+        retained,
+        pid=0,
+    )
 
 
 def prepare_capture(selector):

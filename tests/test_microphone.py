@@ -120,6 +120,23 @@ def test_numeric_device_reindex_is_rejected(monkeypatch):
     assert caught.value.device == new
 
 
+def test_stopping_retains_last_device_identity_for_future_drift_detection(
+    monkeypatch,
+):
+    device = microphone.MicrophoneDevice(0, "Old USB Mic", "old-uid")
+    monkeypatch.setattr(microphone.time, "time", lambda: 100.0)
+    microphone.write_status(
+        "ready", "capture_active", "0", device=device, pid=123,
+    )
+
+    microphone.mark_stopped()
+
+    status = microphone.read_status(active_pid=None, now=101.0)
+    assert status["state"] == "unknown"
+    assert status["device"]["uid"] == "old-uid"
+    assert status["pid"] == 0
+
+
 def test_stable_uid_survives_index_change(monkeypatch):
     moved = microphone.MicrophoneDevice(4, "USB Mic", "stable-uid")
     monkeypatch.setattr(microphone, "enumerate_devices", lambda: [moved])
