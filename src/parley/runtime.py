@@ -13,23 +13,19 @@ paths, voice/model names, or tmux session labels.
 """
 
 import contextvars
-import ctypes
 import fcntl
-import functools
 import json
 import math
 import os
 import re
 import secrets
 import subprocess
-import sys
 import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 
-from parley import config
+from parley import config, processes
 
 SCHEMA = "parley.runtime-status"
 VERSION = 1
@@ -76,84 +72,6 @@ class Writer:
     instance: str
     pid: int
     birth: str
-
-
-class _ProcBsdInfo(ctypes.Structure):
-    """Darwin proc_bsdinfo subset used to distinguish reused PIDs."""
-
-    _fields_ = [
-        ("pbi_flags", ctypes.c_uint32),
-        ("pbi_status", ctypes.c_uint32),
-        ("pbi_xstatus", ctypes.c_uint32),
-        ("pbi_pid", ctypes.c_uint32),
-        ("pbi_ppid", ctypes.c_uint32),
-        ("pbi_uid", ctypes.c_uint32),
-        ("pbi_gid", ctypes.c_uint32),
-        ("pbi_ruid", ctypes.c_uint32),
-        ("pbi_rgid", ctypes.c_uint32),
-        ("pbi_svuid", ctypes.c_uint32),
-        ("pbi_svgid", ctypes.c_uint32),
-        ("rfu_1", ctypes.c_uint32),
-        ("pbi_comm", ctypes.c_char * 16),
-        ("pbi_name", ctypes.c_char * 32),
-        ("pbi_nfiles", ctypes.c_uint32),
-        ("pbi_pgid", ctypes.c_uint32),
-        ("pbi_pjobc", ctypes.c_uint32),
-        ("e_tdev", ctypes.c_uint32),
-        ("e_tpgid", ctypes.c_uint32),
-        ("pbi_nice", ctypes.c_int32),
-        ("pbi_start_tvsec", ctypes.c_uint64),
-        ("pbi_start_tvusec", ctypes.c_uint64),
-    ]
-
-
-@functools.lru_cache(maxsize=1)
-def _darwin_libproc():
-    try:
-        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-        libproc.proc_pidinfo.argtypes = [
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_uint64,
-            ctypes.c_void_p,
-            ctypes.c_int,
-        ]
-        libproc.proc_pidinfo.restype = ctypes.c_int
-    except (AttributeError, OSError):
-        return None
-    return libproc
-
-
-def _process_identity(pid):
-    """Kernel-backed process birth identity for stale and reused PID defense.
-
-    This is the isolated branch's integration seam.  The PID-safety branch
-    should replace it with ``parley.processes.process_identity`` rather than
-    retaining two implementations after merge.
-    """
-    if not isinstance(pid, int) or pid <= 0:
-        return None
-    if sys.platform == "darwin":
-        libproc = _darwin_libproc()
-        if libproc is None:
-            return None
-        info = _ProcBsdInfo()
-        size = ctypes.sizeof(info)
-        result = libproc.proc_pidinfo(pid, 3, 0, ctypes.byref(info), size)
-        if result != size or info.pbi_pid != pid:
-            return None
-        return f"darwin:{info.pbi_start_tvsec}:{info.pbi_start_tvusec}"
-    if sys.platform.startswith("linux"):
-        try:
-            boot = Path(
-                "/proc/sys/kernel/random/boot_id"
-            ).read_text(encoding="ascii").strip()
-            stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-            start_ticks = stat.rsplit(")", 1)[1].split()[19]
-        except (IndexError, OSError):
-            return None
-        return f"linux:{boot}:{start_ticks}"
-    return None
 
 
 def _paths():
@@ -320,7 +238,7 @@ def _owns(snapshot, writer):
 
 def _owner_alive(owner):
     try:
-        return _process_identity(owner["pid"]) == owner["birth"]
+        return processes.process_identity(owner["pid"]) == owner["birth"]
     except (KeyError, TypeError):
         return False
 
@@ -509,7 +427,7 @@ def claim(component):
     if component not in COMPONENTS:
         raise ValueError(f"unknown runtime component: {component}")
     pid = os.getpid()
-    birth = _process_identity(pid)
+    birth = processes.process_identity(pid)
     if birth is None:
         return None
     writer = Writer(component, secrets.token_hex(16), pid, birth)

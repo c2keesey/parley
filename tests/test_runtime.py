@@ -14,7 +14,7 @@ def isolated_status(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "_target_available", lambda pane: pane == "%42")
     identity = "linux:00000000-0000-0000-0000-000000000000:"
     monkeypatch.setattr(
-        runtime, "_process_identity", lambda pid: identity + str(pid))
+        runtime.processes, "process_identity", lambda pid: identity + str(pid))
 
 
 def status_path():
@@ -134,12 +134,12 @@ def test_manager_target_replacement_invalidates_old_listener():
     assert snapshot["target"]["id"] == "%42"
 
 
-def test_dead_owners_recover_to_degraded_without_pid_reuse():
+def test_dead_owners_recover_to_degraded_without_pid_reuse(monkeypatch):
     listener = runtime.claim("listener")
     speech = runtime.claim("speech")
     runtime.set_listener(listener, "sending")
     runtime.set_speech(speech, synthesis="active", playback="idle")
-    runtime._process_identity = lambda _pid: None
+    monkeypatch.setattr(runtime.processes, "process_identity", lambda _pid: None)
 
     snapshot = runtime.snapshot()
 
@@ -283,7 +283,7 @@ def test_status_io_and_identity_failures_do_not_take_down_core_work(monkeypatch)
 
 
 def test_claim_fails_closed_without_process_birth_identity(monkeypatch):
-    monkeypatch.setattr(runtime, "_process_identity", lambda _pid: None)
+    monkeypatch.setattr(runtime.processes, "process_identity", lambda _pid: None)
 
     assert runtime.claim("listener") is None
     assert runtime.snapshot()["listener"]["state"] == "off"
