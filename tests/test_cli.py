@@ -105,16 +105,46 @@ def test_off_does_not_stop_listener_owned_by_another_pane(monkeypatch):
     cli.main(["off"])
 
 
-def test_speak_on_remains_available_as_output_only(monkeypatch):
+def test_output_on_enables_only_spoken_output(monkeypatch, capsys):
     speech = []
     monkeypatch.setattr(cli.hooks, "turn_on", lambda keys: speech.append(keys))
-    monkeypatch.setattr(cli, "_report", lambda keys: None)
+    monkeypatch.setattr(cli.hooks, "is_on", lambda keys: True)
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
     monkeypatch.setattr(
         listen,
         "set_target",
         lambda pane: (_ for _ in ()).throw(AssertionError("must not listen")),
     )
+
+    cli.main(["output", "on"])
+
+    assert len(speech) == 1
+    assert "output: on" in capsys.readouterr().out
+
+
+def test_output_off_disables_output_without_touching_listener(
+        monkeypatch):
+    disabled = []
+    stopped = []
+    monkeypatch.setattr(
+        cli.hooks, "turn_off", lambda keys: disabled.append(keys))
+    monkeypatch.setattr(cli, "stop", lambda: stopped.append(True))
+    monkeypatch.setattr(listen, "stop", lambda: (_ for _ in ()).throw(
+        AssertionError("output off must not stop listening")))
+    monkeypatch.setattr(cli, "_report_output", lambda keys: None)
+    monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+
+    cli.main(["output", "off"])
+
+    assert len(disabled) == 1
+    assert stopped == [True]
+
+
+def test_speak_remains_a_compatibility_alias(monkeypatch):
+    speech = []
+    monkeypatch.setattr(cli.hooks, "turn_on", lambda keys: speech.append(keys))
+    monkeypatch.setattr(cli, "_report_output", lambda keys: None)
+    monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
 
     cli.main(["speak", "on"])
 
@@ -156,6 +186,43 @@ def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
     cli.main(["listen", "status"])
 
     assert "sends to ivory-lynx (pane %531)" in capsys.readouterr().out
+
+
+def test_listen_on_starts_only_input(monkeypatch):
+    started = []
+    monkeypatch.setattr(
+        cli, "_start_listener", lambda listener, device: started.append(device))
+    monkeypatch.setattr(
+        cli.hooks,
+        "turn_on",
+        lambda keys: (_ for _ in ()).throw(
+            AssertionError("listen on must not enable output")),
+    )
+
+    cli.main(["listen", "on"])
+
+    assert started == ["default"]
+
+
+def test_listen_off_stops_only_input(monkeypatch):
+    stopped = []
+    monkeypatch.setattr(listen, "stop", lambda: stopped.append(True) or True)
+    monkeypatch.setattr(
+        cli.hooks,
+        "turn_off",
+        lambda keys: (_ for _ in ()).throw(
+            AssertionError("listen off must not disable output")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "stop",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("listen off must not clear spoken output")),
+    )
+
+    cli.main(["listen", "off"])
+
+    assert stopped == [True]
 
 
 def test_listener_daemon_enables_device_recovery(monkeypatch):

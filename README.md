@@ -93,9 +93,10 @@ parley on                 # spoken replies + hands-free input in this pane
 parley off                # stop both for this pane
 parley status             # report both states
 
-parley speak on           # output-only mode (no microphone)
-parley speak off
-parley speak status
+parley listen on          # input only
+parley listen off
+parley output on          # output only
+parley output off
 
 parley say "Tests are green, deploying now."
 parley say --voice nova "Heads up, that migration looks wrong."
@@ -112,7 +113,7 @@ the invoking pane. In Agent Deck, that pane is the fallback: the listener then
 follows the session shown by the most recently active human terminal client and
 rechecks the destination at send time. Background Deck control clients are
 ignored. The confirmation `parley on` prints is the same instruction the startup
-hook injects, so it lands in the transcript as context. Use `parley speak on`
+hook injects, so it lands in the transcript as context. Use `parley output on`
 when spoken output without an active microphone is intentional.
 
 ## Hands-free input

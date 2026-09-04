@@ -117,7 +117,7 @@ def test_install_uses_parley_skill_name():
     instructions = skill.read_text()
     assert "name: parley" in instructions
     assert "Run `parley on` to start two-way voice" in instructions
-    assert "Do not run `parley listen on` separately" in instructions
+    assert "`parley listen on` separately after `parley on`" in instructions
     assert not (hooks.SKILL_DIRS["codex"] / "voice").exists()
 
 

@@ -5,9 +5,11 @@ description: Turn Parley's two-way voice on or off for this session — replies 
 
 Run `parley on` to start two-way voice for the current tmux pane: spoken
 replies and hands-free listening. Run `parley off` to stop both for this pane.
-`parley status` reports both states. Say which you did, then continue with the
-work. Do not run `parley listen on` separately after `parley on`; use it only
-to repair or explicitly reroute an already-running listener.
+Use `parley listen on` or `parley listen off` for input only, and `parley
+output on` or `parley output off` for spoken output only. `parley status`
+reports both states. Say which you did, then continue with the work. Do not run
+`parley listen on` separately after `parley on`; use it only when the user
+explicitly wants input without output or wants to reroute the listener.
 
 While voice is on:
 

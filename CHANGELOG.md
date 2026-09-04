@@ -9,8 +9,9 @@ versioning while it is in beta.
   hands-free listening routed to the invoking tmux pane.
 - Made `parley off` stop that pane's listener without disturbing a listener
   owned by another session.
-- Added `parley speak on|off|status` for intentional output-only use, while
-  retaining `parley listen` as the explicit low-level input control.
+- Added `parley output on|off` and `parley listen on|off` as the explicit
+  controls for either half of the experience. The earlier `parley speak`
+  spelling remains as an undocumented compatibility alias.
 - Made hands-free routing follow the Agent Deck session displayed by the most
   recently active human terminal client, ignoring background control clients
   and rechecking focus immediately before submission.

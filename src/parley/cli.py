@@ -20,6 +20,15 @@ def _report(keys):
         print(config.PROMPT)
 
 
+def _report_output(keys):
+    on = hooks.is_on(keys)
+    print(f"output: {'on' if on else 'off'} "
+          f"(provider={config.provider()}, voice={config.active_voice()}, "
+          f"model={config.active_model()})")
+    if on:
+        print(config.PROMPT)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="parley",
@@ -32,8 +41,8 @@ def build_parser():
     sub.add_parser("toggle", help="flip two-way voice in this tmux pane")
     sub.add_parser("status", help="show speech and listening state")
 
-    speak = sub.add_parser("speak", help="control speech output only")
-    speak.add_argument("state", nargs="?", choices=["on", "off", "status"])
+    output = sub.add_parser("output", help="control spoken output only")
+    output.add_argument("state", nargs="?", choices=["on", "off", "status"])
 
     default = sub.add_parser("default", help="what new sessions start as")
     default.add_argument("state", nargs="?", choices=["on", "off"])
@@ -128,6 +137,9 @@ def _stop_owned_listener(listener):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    # Preserve older scripts without exposing a seventh user-facing toggle.
+    if argv and argv[0] == "speak":
+        argv[0] = "output"
     # A harness may pass the payload as a bare JSON argument.
     if argv and argv[0].strip().startswith("{"):
         hooks.handle(argv=argv)
@@ -171,7 +183,7 @@ def main(argv=None):
         print(f"parley default: {'on' if config.DEFAULT.exists() else 'off'}")
         return
 
-    if command == "speak":
+    if command == "output":
         keys = hooks.session_keys()
         state = args.state or "status"
         if state == "on":
@@ -182,7 +194,7 @@ def main(argv=None):
         from parley import indicator
 
         indicator.refresh()
-        _report(keys)
+        _report_output(keys)
         return
 
     if command in ("on", "off", "toggle", "status"):
