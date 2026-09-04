@@ -19,6 +19,8 @@ versioning while it is in beta.
 - Detect default-output changes during active speech and resume the unheard
   portion on the new route; retry unexpected `afplay` failures instead of
   silently treating them as successful playback.
+- Announce the speaking session only when output switches sessions, avoiding
+  repeated names across consecutive replies from the same session.
 
 ## 0.5.4 - 2026-08-27
 

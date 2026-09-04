@@ -48,7 +48,7 @@ def chunks(text, limit=None):
         yield remaining
 
 
-def enqueue(text, voice=None, model=None):
+def enqueue(text, voice=None, model=None, session=None, session_label=None):
     text = (text or "").strip()
     if not text:
         return False
@@ -64,6 +64,9 @@ def enqueue(text, voice=None, model=None):
             "voice": voice,
             "model": model,
         }
+        if session:
+            item["session"] = session
+            item["session_label"] = session_label or session
         name = f"{timestamp:020d}-{os.getpid()}-{index:04d}.json"
         # Write then rename so a drainer never sees a half-written item.
         tmp = config.QUEUE / (name + ".tmp")
@@ -230,6 +233,26 @@ def _pending():
     return sorted(p for p in config.QUEUE.iterdir() if p.suffix == ".json")
 
 
+def _last_spoken_session():
+    try:
+        return config.LAST_SESSION.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _text_for_session(job):
+    """Announce only when this queued block changes the speaking session."""
+    session = job.get("session", "")
+    if not session or session == _last_spoken_session():
+        return job["text"]
+    return f"Session {job.get('session_label') or session}. {job['text']}"
+
+
+def _remember_spoken_session(session):
+    if session:
+        config.private_write(config.LAST_SESSION, session)
+
+
 def _interrupt_token():
     try:
         return config.INTERRUPT.read_text().strip()
@@ -355,12 +378,13 @@ def drain():
             skip = _skip_token()
             try:
                 started = time.time()
+                spoken_text = _text_for_session(job)
                 audio = synthesize(
-                    job["text"], job.get("voice"), job.get("model"),
+                    spoken_text, job.get("voice"), job.get("model"),
                     job.get("provider"),
                 )
                 config.log(
-                    f"spoke {job.get('voice')} {len(job['text'])}c "
+                    f"spoke {job.get('voice')} {len(spoken_text)}c "
                     f"synth={time.time() - started:.1f}s {len(audio)}b"
                 )
                 if _interrupt_token() != interrupt:
@@ -384,13 +408,15 @@ def drain():
                     continue
                 if not _wait_for_microphone(interrupt):
                     return True
-                play(audio, interrupt, skip)
+                played = play(audio, interrupt, skip)
                 if _interrupt_token() != interrupt:
                     return True
                 if _skip_token() != skip:
                     config.log("speech block skipped during playback")
                     spoke = False
                     continue
+                if played is not False:
+                    _remember_spoken_session(job.get("session"))
                 spoke = True
             except Exception as exc:
                 config.log(f"error: {exc}")

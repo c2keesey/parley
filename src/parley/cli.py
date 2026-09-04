@@ -267,7 +267,14 @@ def main(argv=None):
         return
 
     if command == "say":
-        enqueue(" ".join(args.text), voice=args.voice, model=args.model)
+        keys = hooks.session_keys()
+        enqueue(
+            " ".join(args.text),
+            voice=args.voice,
+            model=args.model,
+            session=keys[0],
+            session_label=hooks.session_label(),
+        )
         if args.wait:
             drain()
         else:

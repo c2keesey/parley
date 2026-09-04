@@ -18,8 +18,8 @@ way people really use them:
   replies aloud and lets an agent speak during a long-running task.
 - **Have a real back-and-forth.** Dictate a response, interrupt naturally, or
   permanently stop speech with a dedicated voice command.
-- **Run several agents without losing the thread.** Each response begins with
-  its session name, so you always know who is speaking.
+- **Run several agents without losing the thread.** Responses announce their
+  session when output switches agents, without repeating it every turn.
 - **Choose the voice quality you want.** Use the built-in local voice for free,
   or add OpenAI or ElevenLabs for more natural speech.
 - **Keep always-on listening local.** Wake and control phrases are recognized
@@ -269,7 +269,7 @@ Every knob is an environment variable.
 | `PARLEY_SPEED` | `1.2` | OpenAI speech speed |
 | `PARLEY_INSTRUCTIONS` | conversational | delivery notes for `gpt-*` models |
 | `PARLEY_MAX_CHARS` | `3000` | maximum characters per TTS request; longer replies are sentence-aware chunks |
-| `PARLEY_SESSION_NAME` | tmux session name | spoken before every automatic reply |
+| `PARLEY_SESSION_NAME` | tmux session name | spoken when automatic output switches sessions |
 | `PARLEY_ENV` | — | extra file to read the API key from |
 | `PARLEY_WAKE` | `okay computer` | phrase that starts capture |
 | `PARLEY_SEND` | `send it` | phrase that submits |
@@ -309,6 +309,12 @@ that exposes no session id at all.
 Utterances become files in a spool directory named by nanosecond timestamp.
 Any process may enqueue; exactly one drains, chosen by an exclusive `flock`.
 That is what makes overlap impossible rather than merely unlikely.
+
+Automatic replies carry their stable pane identity through that queue. Parley
+remembers the session of the last successfully played block and announces a
+name only when the next block belongs to a different session. If sessions
+interleave, each switch is announced; consecutive blocks and replies from one
+session are not.
 
 Playback starts with six-tenths of a second of silence, because Bluetooth
 headphones take about that long to switch profiles and will otherwise swallow

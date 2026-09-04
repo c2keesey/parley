@@ -21,6 +21,7 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LOG", tmp_path / "speak.log")
     monkeypatch.setattr(config, "INTERRUPT", tmp_path / "interrupt")
     monkeypatch.setattr(config, "SKIP", tmp_path / "skip")
+    monkeypatch.setattr(config, "LAST_SESSION", tmp_path / "last-session")
     monkeypatch.setattr(indicator, "refresh", lambda: None)
     monkeypatch.setattr(
         player.audio_routes, "default_output_device", lambda: None)
@@ -211,6 +212,67 @@ def test_queue_uses_the_active_provider_voice_and_model(monkeypatch):
     assert job["provider"] == "elevenlabs"
     assert job["voice"] == "eleven-voice"
     assert job["model"] == "eleven-model"
+
+
+def test_queue_preserves_session_identity_and_label():
+    player.enqueue(
+        "hello", session="pane-_42", session_label="morning refresh")
+
+    import json
+    job = json.loads(player._pending()[0].read_text())
+    assert job["session"] == "pane-_42"
+    assert job["session_label"] == "morning refresh"
+
+
+def test_session_name_is_only_announced_when_output_switches(monkeypatch):
+    spoken = []
+    monkeypatch.setattr(
+        player,
+        "synthesize",
+        lambda text, voice, model, provider: spoken.append(text) or b"audio",
+    )
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(
+        player, "play", lambda audio, interrupt=None, skip=None: True)
+
+    player.enqueue("First.", session="pane-a", session_label="alpha")
+    player.drain()
+    player.enqueue("Second.", session="pane-a", session_label="alpha")
+    player.drain()
+    player.enqueue("Third.", session="pane-b", session_label="beta")
+    player.drain()
+    player.enqueue("Fourth.", session="pane-a", session_label="alpha")
+    player.drain()
+
+    assert spoken == [
+        "Session alpha. First.",
+        "Second.",
+        "Session beta. Third.",
+        "Session alpha. Fourth.",
+    ]
+
+
+def test_failed_output_does_not_claim_session(monkeypatch):
+    spoken = []
+    results = iter([False, True])
+    monkeypatch.setattr(
+        player,
+        "synthesize",
+        lambda text, voice, model, provider: spoken.append(text) or b"audio",
+    )
+    monkeypatch.setattr(player, "_wake_output", lambda: None)
+    monkeypatch.setattr(
+        player,
+        "play",
+        lambda audio, interrupt=None, skip=None: next(results),
+    )
+
+    player.enqueue("First.", session="pane-a", session_label="alpha")
+    player.drain()
+    player.enqueue("Retry.", session="pane-a", session_label="alpha")
+    player.drain()
+
+    assert spoken == ["Session alpha. First.", "Session alpha. Retry."]
 
 
 def test_queued_reply_is_private_on_disk():

@@ -121,6 +121,30 @@ def test_speak_on_remains_available_as_output_only(monkeypatch):
     assert len(speech) == 1
 
 
+def test_say_carries_session_identity_into_output_queue(monkeypatch):
+    queued = []
+    monkeypatch.setattr(cli.hooks, "session_keys", lambda: ["pane-_42"])
+    monkeypatch.setattr(cli.hooks, "session_label", lambda: "morning refresh")
+    monkeypatch.setattr(
+        cli,
+        "enqueue",
+        lambda text, **kwargs: queued.append((text, kwargs)),
+    )
+    monkeypatch.setattr(cli, "detach", lambda fn: None)
+
+    cli.main(["say", "Still working."])
+
+    assert queued == [(
+        "Still working.",
+        {
+            "voice": None,
+            "model": None,
+            "session": "pane-_42",
+            "session_label": "morning refresh",
+        },
+    )]
+
+
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
     monkeypatch.setattr(listen, "is_running", lambda: 123)
     monkeypatch.setattr(listen, "get_target", lambda: "%531")

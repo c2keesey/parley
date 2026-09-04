@@ -170,13 +170,20 @@ def test_automatic_reply_is_enqueued_with_its_session_name(monkeypatch):
     queued = []
     monkeypatch.setattr(hooks, "reply_from", lambda payload: ("reply-1", "hello"))
     monkeypatch.setattr(hooks, "session_label", lambda payload: "windy-falcon")
-    monkeypatch.setattr(hooks, "enqueue", queued.append)
+    monkeypatch.setattr(
+        hooks,
+        "enqueue",
+        lambda text, **kwargs: queued.append((text, kwargs)),
+    )
     monkeypatch.setattr(hooks, "drain", lambda: None)
     monkeypatch.setattr(hooks.time, "sleep", lambda seconds: None)
 
     hooks.speak_reply("pane-42", {})
 
-    assert queued == ["Session windy-falcon. hello"]
+    assert queued == [(
+        "hello",
+        {"session": "pane-42", "session_label": "windy-falcon"},
+    )]
 
 
 def test_malformed_payload_is_survivable(monkeypatch):

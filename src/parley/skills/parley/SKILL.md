@@ -11,8 +11,9 @@ to repair or explicitly reroute an already-running listener.
 
 While voice is on:
 
-- Your reply is read aloud after Parley announces this session's name. Answer
-  in a few sentences of plain speech — no markdown, code, URLs, links,
+- Your reply is read aloud after Parley announces this session's name when
+  output switches sessions. Consecutive replies from the same session omit the
+  repeated name. Answer in a few sentences of plain speech — no markdown, code, URLs, links,
   citations, or file paths. If attribution matters, name the source in plain
   speech without linking it.
 - Never use AskUserQuestion. It blocks on a dialog that voice cannot answer;

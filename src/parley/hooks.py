@@ -110,7 +110,7 @@ def session_label(payload=None):
 
 
 def label_reply(text, payload=None):
-    """Make concurrent spoken sessions distinguishable without rewriting."""
+    """Return the explicit form used when a session switch is announced."""
     return f"Session {session_label(payload)}. {text}"
 
 
@@ -182,7 +182,11 @@ def speak_reply(marker_key, payload):
 
     seen.parent.mkdir(parents=True, exist_ok=True)
     seen.write_text(reply_id)
-    enqueue(label_reply(text, payload))
+    enqueue(
+        text,
+        session=marker_key,
+        session_label=session_label(payload),
+    )
     drain()
 
 
