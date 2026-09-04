@@ -3,6 +3,23 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
+## 0.6.0 - 2026-09-04
+
+- Made `parley on` start the complete two-way experience: spoken replies plus
+  hands-free listening routed to the invoking tmux pane.
+- Made `parley off` stop that pane's listener without disturbing a listener
+  owned by another session.
+- Added `parley speak on|off|status` for intentional output-only use, while
+  retaining `parley listen` as the explicit low-level input control.
+- Made hands-free routing follow the Agent Deck session displayed by the most
+  recently active human terminal client, ignoring background control clients
+  and rechecking focus immediately before submission.
+- Follow the macOS default input instead of volatile AVFoundation device zero,
+  and keep the listener alive while input devices disconnect or change.
+- Detect default-output changes during active speech and resume the unheard
+  portion on the new route; retry unexpected `afplay` failures instead of
+  silently treating them as successful playback.
+
 ## 0.5.4 - 2026-08-27
 
 - Switched George's default ElevenLabs model to v3 Conversational for lower

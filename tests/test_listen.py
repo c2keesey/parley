@@ -19,10 +19,61 @@ def isolate_microphone_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(listen.player, "resume", lambda: False)
     monkeypatch.setattr(listen.player, "microphone_active", lambda: False)
     monkeypatch.setattr(listen.player, "output_playing", lambda: False)
+    monkeypatch.setattr(listen.audio, "default_input_device", lambda: None)
     monkeypatch.setattr(listen.config, "LISTENER_STATE", tmp_path / "listener.state")
     monkeypatch.setattr(listen.config, "TRIGGERS", tmp_path / "triggers")
+    monkeypatch.setattr(listen.config, "STATE", tmp_path)
+    monkeypatch.setattr(listen, "TARGET", tmp_path / "target")
     listen.triggers.load.cache_clear()
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+
+
+def test_active_deck_target_uses_most_recent_human_tmux_client(monkeypatch):
+    output = (
+        "\t%control\t999\tagentdeck_background_11111111\n"
+        "/dev/ttys001\t%old\t100\tagentdeck_old_22222222\n"
+        "/dev/ttys002\t%active\t200\tagentdeck_active_33333333\n"
+        "/dev/ttys003\t%shell\t300\tplain-shell\n"
+    )
+    monkeypatch.setattr(
+        listen.subprocess,
+        "run",
+        lambda *args, **kwargs: listen.subprocess.CompletedProcess(
+            args[0], 0, stdout=output),
+    )
+
+    assert listen.active_deck_target() == "%active"
+
+
+def test_sync_target_follows_deck_focus_and_retains_static_fallback(
+        tmp_path, monkeypatch):
+    listen.set_target("%armed")
+    monkeypatch.setattr(listen, "active_deck_target", lambda: "%focused")
+    logs = []
+    monkeypatch.setattr(listen.config, "log", logs.append)
+
+    assert listen.sync_target() == "%armed"
+
+    listen.set_follow_active(True)
+    assert listen.sync_target() == "%focused"
+    assert listen.get_target() == "%focused"
+    assert logs == ["listener target followed active deck pane %focused"]
+
+
+def test_inject_rechecks_active_target_at_send_time(monkeypatch):
+    calls = []
+    monkeypatch.setattr(listen, "sync_target", lambda: "%now-focused")
+    monkeypatch.setattr(
+        listen.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command)
+        or listen.subprocess.CompletedProcess(command, 0),
+    )
+    monkeypatch.setattr(listen.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    assert listen.inject("route this")
+    assert calls[0][3] == "%now-focused"
 
 
 @pytest.mark.parametrize("heard", [
@@ -220,6 +271,66 @@ def test_click_sized_burst_remains_below_speech_gate(monkeypatch):
 
     assert actual == []
     assert logs == ["gate ignored short audio voiced=0.06s"]
+
+
+def test_default_input_route_change_reopens_capture(monkeypatch):
+    quiet = b"\x00\x00" * listen.FRAME
+    heartbeat_frames = int(listen.RATE / listen.FRAME) + 1
+    processes = [
+        FakeAudioProcess([quiet] * heartbeat_frames),
+        FakeAudioProcess([quiet]),
+    ]
+    launched = []
+    devices = iter([101, 202])
+    monkeypatch.setattr(
+        listen.audio, "default_input_device", lambda: next(devices, 202))
+    monkeypatch.setattr(
+        listen.subprocess,
+        "Popen",
+        lambda command, **kwargs: launched.append(command)
+        or processes.pop(0),
+    )
+    monkeypatch.setattr(listen.time, "sleep", lambda seconds: None)
+
+    events = listen.bursts("default", reconnect=True)
+
+    assert next(events) == (None, "capture-ready")
+    assert next(events) == (None, "capture-reset")
+    assert next(events) == (None, "capture-ready")
+    assert len(launched) == 2
+    assert launched[0][launched[0].index("-i") + 1] == ":default"
+    events.close()
+
+
+def test_input_loss_during_dictation_releases_speech_and_reconnects(
+        tmp_path, monkeypatch):
+    states = []
+    resumed = []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "set_listener_state", states.append)
+    monkeypatch.setattr(listen.player, "resume", lambda: resumed.append(True))
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+    monkeypatch.setattr(
+        listen,
+        "bursts",
+        lambda device: iter([
+            ([b"wake audio"] * 3, False),
+            (None, "capture-reset"),
+            (None, "capture-ready"),
+        ]),
+    )
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: listen.WAKE)
+    monkeypatch.setattr(listen, "cue", lambda kind: None)
+
+    listen.run()
+
+    assert "capturing" in states
+    assert "reconnecting" in states
+    assert states[-1] == "ready"
+    assert resumed
 
 
 def test_possible_wake_holds_speech_before_local_recognition(monkeypatch):

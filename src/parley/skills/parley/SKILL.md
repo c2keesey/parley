@@ -3,8 +3,11 @@ name: parley
 description: Turn Parley's two-way voice on or off for this session — replies read aloud, and hands-free dictation back. Use when the user says "voice on", "voice off", "Parley on", "Parley off", "talk to me", "read that aloud", "turn on voice mode", "stop talking", or invokes /parley.
 ---
 
-Run `parley on` to start, `parley off` to stop. `parley status` reports the
-current state. Say which you did, then continue with the work.
+Run `parley on` to start two-way voice for the current tmux pane: spoken
+replies and hands-free listening. Run `parley off` to stop both for this pane.
+`parley status` reports both states. Say which you did, then continue with the
+work. Do not run `parley listen on` separately after `parley on`; use it only
+to repair or explicitly reroute an already-running listener.
 
 While voice is on:
 
@@ -17,14 +20,26 @@ While voice is on:
 - Use `parley say "..."` to speak during a long task, so the user is not left
   in silence. It queues behind whatever is already speaking.
 
-For hands-free input, `parley listen on` from inside tmux. The user says
-"okay computer", speaks, then "send it", and the message is typed into the
-session. "scratch that" or "scrap that" as a standalone utterance discards a
-message in progress. A persistent tmux badge in Parley-enabled panes
+For hands-free input, the user says "okay computer", speaks, then "send it",
+and the message is typed into the session. "scratch that" or "scrap that" as
+a standalone utterance discards a message in progress. A persistent tmux badge
+in Parley-enabled panes
 distinguishes READY, LISTENING, SENDING, and SPEAKING · MIC READY, and names
-the receiving session. Panes with Parley turned off show no badge.
+the receiving session. RECONNECTING means Parley is waiting for a usable macOS
+input after a device change. Panes with Parley turned off show no badge.
+In Agent Deck, the listener follows the session shown by the most recently
+active human terminal client and rechecks it when sending; background control
+clients cannot redirect dictation. In plain tmux it stays on the pane where
+listening was started.
 Repeating "okay computer" during capture replays the wake tone, keeps capture
 active, and removes that repeated wake phrase from the message.
+
+Parley follows the macOS default input and output as AirPods connect or
+disconnect. It keeps the listener alive and retries input without changing the
+target pane; never restart or retarget listening merely to repair an audio
+device change. If input disappears during dictation, that partial turn is
+discarded. Active speech resumes its unheard portion on a newly selected
+default output.
 
 If the user reports unreliable trigger recognition, check `parley listen
 status`. Use `parley enroll` when they explicitly want personalized triggers;

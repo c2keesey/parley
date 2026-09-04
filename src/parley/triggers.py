@@ -204,7 +204,7 @@ def match(audio, allowed=None):
     return None, best_score, best_threshold
 
 
-def collect(device="0"):
+def collect(device="default"):
     """Guide a hands-free local enrollment and return raw in-memory samples."""
     from parley import listen
 

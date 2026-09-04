@@ -15,11 +15,13 @@ import subprocess
 import tempfile
 import time
 
+from parley import audio as audio_routes
 from parley import config
 from parley.tts import synthesize
 
 SENTENCE_BOUNDARY = re.compile(r'''[.!?]["'\u2019\u201d)\]]*(?=\s)''')
 RESUME_REWIND_SECONDS = 0.25
+MAX_PLAYBACK_FAILURES = 3
 
 
 def chunks(text, limit=None):
@@ -116,11 +118,27 @@ def _remaining_audio(path, offset):
     return remainder
 
 
+def _wait_for_playback(proc, output_device):
+    """Wait for afplay, noticing a macOS default-output route change."""
+    if output_device is None:
+        return proc.wait(), False
+    while True:
+        try:
+            return proc.wait(timeout=0.1), False
+        except subprocess.TimeoutExpired:
+            current = audio_routes.default_output_device()
+            if current is None or current == output_device:
+                continue
+            proc.terminate()
+            return proc.wait(), True
+
+
 def play(audio, interrupt=None, skip=None):
     config.STATE.mkdir(parents=True, exist_ok=True)
     proc = None
     resumed_paths = []
     offset = 0.0
+    failures = 0
     suffix = ".aiff" if audio.startswith(b"FORM") else ".mp3"
     with tempfile.NamedTemporaryFile(
         suffix=suffix, delete=False, dir=config.STATE
@@ -140,6 +158,7 @@ def play(audio, interrupt=None, skip=None):
             pause_token = _pause_token()
             started = time.monotonic()
             proc = subprocess.Popen(["afplay", playback_path])
+            output_device = audio_routes.default_output_device()
             with open(config.PIDFILE, "a") as fh:
                 fh.write(f"{proc.pid}\n")
             config.SPEECH_PID.write_text(str(proc.pid))
@@ -153,7 +172,8 @@ def play(audio, interrupt=None, skip=None):
                 proc.terminate()
             if skip is not None and _skip_token() != skip:
                 proc.terminate()
-            returncode = proc.wait()
+            returncode, route_changed = _wait_for_playback(
+                proc, output_device)
             elapsed = max(0.0, time.monotonic() - started)
             try:
                 if config.SPEECH_PID.read_text().strip() == str(proc.pid):
@@ -164,11 +184,23 @@ def play(audio, interrupt=None, skip=None):
                 return False
             if skip is not None and _skip_token() != skip:
                 return True
-            if _pause_token() == pause_token or returncode == 0:
+            if returncode == 0:
                 return True
+            if not route_changed and _pause_token() == pause_token:
+                failures += 1
+                if failures >= MAX_PLAYBACK_FAILURES:
+                    config.log(
+                        f"speech failed after {failures} afplay attempts")
+                    return False
+                config.log(
+                    f"afplay exited {returncode}; retrying current speech")
+                time.sleep(0.1)
+                continue
+            failures = 0
             offset = max(
                 0.001, offset + elapsed - RESUME_REWIND_SECONDS)
-            config.log(f"speech checkpointed at {offset:.2f}s")
+            reason = "output route change" if route_changed else "microphone turn"
+            config.log(f"speech checkpointed at {offset:.2f}s after {reason}")
             if not _wait_for_microphone(interrupt):
                 return False
             config.log(f"speech restarting at {offset:.2f}s after microphone turn")

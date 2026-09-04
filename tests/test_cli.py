@@ -1,6 +1,124 @@
 """Command-line behavior tests."""
 
+from types import SimpleNamespace
+
 from parley import cli, listen, triggers
+
+
+def _stub_live_mode(monkeypatch, pane="%392", target=""):
+    monkeypatch.setenv("TMUX_PANE", pane)
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/opt/whisper-cli")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen, "get_target", lambda: target)
+    monkeypatch.setattr(listen, "is_running", lambda: 123)
+    monkeypatch.setattr(listen, "is_agent_deck_pane", lambda pane: True)
+    monkeypatch.setattr(listen, "set_follow_active", lambda enabled: None)
+    monkeypatch.setattr(listen, "stop", lambda: True)
+    monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        cli,
+        "subprocess",
+        SimpleNamespace(Popen=lambda *args, **kwargs: None, DEVNULL=None),
+    )
+
+
+def test_on_starts_speech_and_hands_free_input_for_invoking_pane(
+        monkeypatch, capsys):
+    _stub_live_mode(monkeypatch)
+    targets = []
+    speech = []
+    monkeypatch.setattr(listen, "set_target", targets.append)
+    monkeypatch.setattr(cli.hooks, "turn_on", lambda keys: speech.append(keys))
+    monkeypatch.setattr(cli, "_report", lambda keys: None)
+
+    cli.main(["on"])
+
+    assert targets == ["%392"]
+    assert len(speech) == 1
+    assert "listening: on" in capsys.readouterr().out
+
+
+def test_on_does_not_leave_speech_only_when_listener_cannot_start(monkeypatch):
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    enabled = []
+    disabled = []
+    monkeypatch.setattr(cli.hooks, "turn_on", lambda keys: enabled.append(keys))
+    monkeypatch.setattr(cli.hooks, "turn_off", lambda keys: disabled.append(keys))
+    monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+
+    try:
+        cli.main(["on"])
+    except SystemExit as error:
+        assert error.code == 1
+    else:
+        raise AssertionError("parley on should fail outside tmux")
+
+    assert enabled == []
+    assert len(disabled) == 1
+
+
+def test_on_does_not_enable_speech_when_listener_exits_during_startup(
+        monkeypatch):
+    _stub_live_mode(monkeypatch)
+    monkeypatch.setattr(listen, "is_running", lambda: 0)
+    enabled = []
+    disabled = []
+    monkeypatch.setattr(cli.hooks, "turn_on", lambda keys: enabled.append(keys))
+    monkeypatch.setattr(cli.hooks, "turn_off", lambda keys: disabled.append(keys))
+
+    try:
+        cli.main(["on"])
+    except SystemExit as error:
+        assert str(error) == "hands-free listener exited during startup"
+    else:
+        raise AssertionError("parley on should fail with a dead listener")
+
+    assert enabled == []
+    assert len(disabled) == 1
+
+
+def test_off_stops_listener_owned_by_invoking_pane(monkeypatch):
+    _stub_live_mode(monkeypatch, target="%392")
+    stopped = []
+    monkeypatch.setattr(listen, "stop", lambda: stopped.append(True) or True)
+    monkeypatch.setattr(cli.hooks, "turn_off", lambda keys: None)
+    monkeypatch.setattr(cli, "stop", lambda: None)
+    monkeypatch.setattr(cli, "_report", lambda keys: None)
+
+    cli.main(["off"])
+
+    assert stopped == [True]
+
+
+def test_off_does_not_stop_listener_owned_by_another_pane(monkeypatch):
+    _stub_live_mode(monkeypatch, target="%511")
+    monkeypatch.setattr(
+        listen,
+        "stop",
+        lambda: (_ for _ in ()).throw(AssertionError("must not stop listener")),
+    )
+    monkeypatch.setattr(cli.hooks, "turn_off", lambda keys: None)
+    monkeypatch.setattr(cli, "stop", lambda: None)
+    monkeypatch.setattr(cli, "_report", lambda keys: None)
+
+    cli.main(["off"])
+
+
+def test_speak_on_remains_available_as_output_only(monkeypatch):
+    speech = []
+    monkeypatch.setattr(cli.hooks, "turn_on", lambda keys: speech.append(keys))
+    monkeypatch.setattr(cli, "_report", lambda keys: None)
+    monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+    monkeypatch.setattr(
+        listen,
+        "set_target",
+        lambda pane: (_ for _ in ()).throw(AssertionError("must not listen")),
+    )
+
+    cli.main(["speak", "on"])
+
+    assert len(speech) == 1
 
 
 def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
@@ -14,6 +132,20 @@ def test_listen_status_names_target_session_and_pane(monkeypatch, capsys):
     cli.main(["listen", "status"])
 
     assert "sends to ivory-lynx (pane %531)" in capsys.readouterr().out
+
+
+def test_listener_daemon_enables_device_recovery(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        listen,
+        "run",
+        lambda device, recover_devices=False: calls.append(
+            (device, recover_devices)),
+    )
+
+    cli.main(["listen", "run"])
+
+    assert calls == [("default", True)]
 
 
 def _stub_enrollment(monkeypatch):

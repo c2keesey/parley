@@ -30,7 +30,7 @@ import time
 import wave
 from pathlib import Path
 
-from parley import config, cues, indicator, player, triggers
+from parley import audio, config, cues, indicator, player, triggers
 
 RATE = 16000
 FRAME = 1024
@@ -69,6 +69,7 @@ MESSAGE_MODEL_URL = (
 
 TARGET = config.STATE / "target"
 LISTEN_PID = config.STATE / "listener.pid"
+FOLLOW_ACTIVE = "follow-active-deck-pane"
 
 
 def whisper_bin():
@@ -383,9 +384,82 @@ def get_target():
         return ""
 
 
+def set_follow_active(enabled):
+    """Choose whether routing follows the active human Agent Deck client."""
+    marker = config.STATE / FOLLOW_ACTIVE
+    if enabled:
+        config.private_write(marker, "1")
+    else:
+        marker.unlink(missing_ok=True)
+
+
+def follows_active():
+    return (config.STATE / FOLLOW_ACTIVE).exists()
+
+
+def is_agent_deck_pane(pane):
+    """Whether a pane belongs to an Agent Deck-managed tmux session."""
+    if not pane:
+        return False
+    try:
+        result = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", pane, "#{session_name}"],
+            capture_output=True, text=True, timeout=2, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and result.stdout.strip().startswith("agentdeck_")
+
+
+def active_deck_target():
+    """The pane shown by the most recently active real terminal client.
+
+    Agent Deck also owns several control-mode clients. They have no TTY and
+    their activity reflects background rendering, so they must never win input
+    routing over the human's attached terminal.
+    """
+    try:
+        result = subprocess.run(
+            ["tmux", "list-clients", "-F",
+             "#{client_tty}\t#{pane_id}\t#{client_activity}\t#{client_session}"],
+            capture_output=True, text=True, timeout=2, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    candidates = []
+    for line in result.stdout.splitlines():
+        fields = line.split("\t", 3)
+        if len(fields) != 4:
+            continue
+        tty, pane, activity, session = fields
+        if not tty or not pane or not session.startswith("agentdeck_"):
+            continue
+        try:
+            candidates.append((int(activity), pane))
+        except ValueError:
+            continue
+    return max(candidates, default=(0, ""))[1]
+
+
+def sync_target():
+    """Follow Deck focus when enabled, retaining the armed pane as fallback."""
+    stored = get_target()
+    if not follows_active():
+        return stored
+    active = active_deck_target()
+    if not active or active == stored:
+        return stored
+    set_target(active)
+    config.log(f"listener target followed active deck pane {active}")
+    indicator.refresh()
+    return active
+
+
 def inject(text):
     """Type the message into the session's pane and submit it."""
-    pane = get_target()
+    pane = sync_target()
     if not pane or not text:
         return False
     typed = subprocess.run(
@@ -413,7 +487,9 @@ def listener_state():
         state = config.LISTENER_STATE.read_text().strip()
     except OSError:
         return "ready"
-    return state if state in {"ready", "capturing", "sending"} else "ready"
+    return state if state in {
+        "ready", "capturing", "sending", "reconnecting"
+    } else "ready"
 
 
 def set_listener_state(state):
@@ -431,7 +507,20 @@ def rms(chunk):
     return int((sum(s * s for s in samples) / len(samples)) ** 0.5)
 
 
-def bursts(device="0", reserve_output=True):
+def _stop_capture(process):
+    """Terminate and reap an FFmpeg capture process without hanging shutdown."""
+    process.terminate()
+    wait = getattr(process, "wait", None)
+    if wait is None:
+        return
+    try:
+        wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        wait()
+
+
+def bursts(device="default", reserve_output=True, reconnect=False):
     """Yield (frames, was_playing) per speech burst, plus idle heartbeats.
 
     Bursts are still collected while the agent is speaking. Dropping them was
@@ -444,25 +533,62 @@ def bursts(device="0", reserve_output=True):
     fire during silence, when no burst would ever arrive.
     """
     ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
-    process = subprocess.Popen(
-        [ffmpeg, "-hide_banner", "-loglevel", "error",
-         "-f", "avfoundation", "-i", f":{device}",
-         "-ac", "1", "-ar", str(RATE), "-f", "s16le", "-"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     frame_seconds = FRAME / RATE
-    buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
-    provisional_turn = False
-    since_beat = 0.0
-    try:
-        while True:
-            chunk = process.stdout.read(FRAME * 2)
-            if not chunk:
-                return
-            since_beat += frame_seconds
-            if since_beat >= 1.0:
-                since_beat = 0.0
-                yield None, False
-            if rms(chunk) > SPEECH_RMS:
+    while True:
+        process = None
+        buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
+        provisional_turn = False
+        capture_ready = False
+        since_beat = 0.0
+        selected_default = (
+            audio.default_input_device() if device == "default" else None
+        )
+        try:
+            process = subprocess.Popen(
+                [ffmpeg, "-hide_banner", "-loglevel", "error",
+                 "-f", "avfoundation", "-i", f":{device}",
+                 "-ac", "1", "-ar", str(RATE), "-f", "s16le", "-"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            while True:
+                chunk = process.stdout.read(FRAME * 2)
+                if not chunk:
+                    break
+                if reconnect and not capture_ready:
+                    capture_ready = True
+                    yield None, "capture-ready"
+                since_beat += frame_seconds
+                if since_beat >= 1.0:
+                    since_beat = 0.0
+                    if selected_default is not None:
+                        current_default = audio.default_input_device()
+                        if (current_default is not None
+                                and current_default != selected_default):
+                            config.log(
+                                "default input changed; reopening microphone")
+                            break
+                    yield None, False
+                if rms(chunk) <= SPEECH_RMS:
+                    if buffer:
+                        buffer.append(chunk)
+                        quiet += frame_seconds
+                        end_silence = (
+                            INTERRUPT_SILENCE if overlapped else END_SILENCE
+                        )
+                        if quiet >= end_silence or voiced >= MAX_BURST:
+                            if voiced >= MIN_SPEECH:
+                                provisional_turn = False
+                                yield buffer, overlapped
+                            elif voiced >= 0.05:
+                                config.log(
+                                    "gate ignored short audio "
+                                    f"voiced={voiced:.2f}s")
+                            if provisional_turn:
+                                player.resume()
+                                provisional_turn = False
+                            buffer, voiced, quiet, overlapped = (
+                                [], 0.0, 0.0, False
+                            )
+                    continue
                 # A reply can finish synthesizing after the user starts the
                 # wake utterance but before tiny Whisper recognizes it. Claim
                 # the microphone on the first voiced frame so that reply stays
@@ -479,30 +605,22 @@ def bursts(device="0", reserve_output=True):
                 quiet = 0.0
                 if speaking():
                     overlapped = True
-            elif buffer:
-                buffer.append(chunk)
-                quiet += frame_seconds
-                end_silence = INTERRUPT_SILENCE if overlapped else END_SILENCE
-                if quiet >= end_silence or voiced >= MAX_BURST:
-                    if voiced >= MIN_SPEECH:
-                        # Ownership transfers to run(), which either promotes
-                        # it after a wake or promptly releases a non-command.
-                        provisional_turn = False
-                        yield buffer, overlapped
-                    elif voiced >= 0.05:
-                        config.log(
-                            f"gate ignored short audio voiced={voiced:.2f}s")
-                    if provisional_turn:
-                        player.resume()
-                        provisional_turn = False
-                    buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
-    finally:
-        if provisional_turn:
-            player.resume()
-        process.terminate()
+        except OSError as exc:
+            if not reconnect:
+                raise
+            config.log(f"microphone unavailable; retrying: {exc}")
+        finally:
+            if provisional_turn:
+                player.resume()
+            if process is not None:
+                _stop_capture(process)
+        if not reconnect:
+            return
+        yield None, "capture-reset"
+        time.sleep(1)
 
 
-def run(device="0"):
+def run(device="default", recover_devices=False):
     """The listening loop. Runs until killed."""
     if not whisper_bin():
         raise SystemExit(
@@ -513,6 +631,7 @@ def run(device="0"):
     config.STATE.mkdir(parents=True, exist_ok=True)
     LISTEN_PID.write_text(str(os.getpid()))
     set_listener_state("ready")
+    sync_target()
     config.log(f"listening wake={WAKE!r} send={SEND!r} device={device}")
     personalized_active = triggers.enrolled()
     if personalized_active:
@@ -521,6 +640,7 @@ def run(device="0"):
 
     capturing, captured, started, last_heard = False, [], 0.0, 0.0
     last_indicator = time.time()
+    last_target_sync = 0.0
 
     def finish(frames):
         set_listener_state("sending")
@@ -540,8 +660,27 @@ def run(device="0"):
             set_listener_state("ready")
 
     try:
-        for burst, overlapped in bursts(device):
+        source = (
+            bursts(device, reconnect=True) if recover_devices else bursts(device)
+        )
+        for burst, overlapped in source:
             now = time.time()
+
+            if burst is None and overlapped == "capture-reset":
+                if capturing:
+                    config.log(
+                        "discarded active dictation after input device loss")
+                capturing, captured = False, []
+                player.resume()
+                set_listener_state("reconnecting")
+                continue
+            if burst is None and overlapped == "capture-ready":
+                set_listener_state("ready")
+                continue
+
+            if now - last_target_sync >= 1:
+                sync_target()
+                last_target_sync = now
 
             # Newly launched Agent Deck sessions get the badge without a
             # listener restart. The displayed text itself checks this process

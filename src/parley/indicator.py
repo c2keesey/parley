@@ -71,6 +71,8 @@ def text(viewing_pane=""):
         status = "🔴 PARLEY LISTENING"
     elif state == "sending":
         status = "⏳ PARLEY SENDING"
+    elif state == "reconnecting":
+        status = "🎧 PARLEY RECONNECTING"
     elif listen.speaking():
         status = "🔊 PARLEY SPEAKING · MIC READY"
     else:

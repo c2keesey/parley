@@ -26,8 +26,9 @@ way people really use them:
   on your Mac; cloud transcription happens only after you choose to send a
   dictated message.
 
-Parley is per-session, so you decide which agents can speak. Turn it on when
-you want a conversation and leave every other terminal quiet.
+Parley is per-session, so you decide which agent receives your hands-free
+dictation and which agents can speak. Turn it on when you want a conversation
+and leave every other terminal quiet.
 
 ## Install
 
@@ -88,9 +89,13 @@ resuming the unspoken remainder after you interrupt a reply.
 ## Use
 
 ```sh
-parley on                 # speak replies in this session
-parley off                # stop
-parley status
+parley on                 # spoken replies + hands-free input in this pane
+parley off                # stop both for this pane
+parley status             # report both states
+
+parley speak on           # output-only mode (no microphone)
+parley speak off
+parley speak status
 
 parley say "Tests are green, deploying now."
 parley say --voice nova "Heads up, that migration looks wrong."
@@ -98,36 +103,62 @@ parley say --wait "..."   # block until spoken
 
 parley voices             # audition OpenAI voices, or list ElevenLabs voices
 parley stop               # drop the queue, silence everything
-parley default on         # new sessions start speaking
+parley default on         # new sessions start in output-only mode
 ```
 
-Turning it on mid-session works without a restart: the confirmation it prints
-is the same instruction the startup hook injects, so it lands in the transcript
-as context.
+Turning it on mid-session works without a restart. `parley on` requires tmux,
+starts spoken output, and starts or retargets the single hands-free listener to
+the invoking pane. In Agent Deck, that pane is the fallback: the listener then
+follows the session shown by the most recently active human terminal client and
+rechecks the destination at send time. Background Deck control clients are
+ignored. The confirmation `parley on` prints is the same instruction the startup
+hook injects, so it lands in the transcript as context. Use `parley speak on`
+when spoken output without an active microphone is intentional.
 
 ## Hands-free input
 
-Voice output alone still leaves you typing. `parley listen` closes the
-loop: say the wake phrase, dictate, say the send phrase, and the message is
-typed into your agent's pane and submitted.
+`parley on` closes the loop: say the wake phrase, dictate, say the send phrase,
+and the message is typed into your agent's pane and submitted. The lower-level
+`parley listen` commands remain available for explicitly moving or inspecting
+the single listener without changing speech output.
+
+When you switch the session displayed by your terminal in Agent Deck, Parley
+moves the listener target with it. The visible session's badge should therefore
+settle on `THIS PANE`; a pane explicitly armed outside Agent Deck remains a
+static target.
 
 While listening is active, a tmux session shows the state badge only when its
 active pane has Parley turned on:
 `🎙 PARLEY READY` while the wake detector is armed, `🔴 PARLEY LISTENING` while
 capturing dictation, `⏳ PARLEY SENDING` during transcription and submission,
-and `🔊 PARLEY SPEAKING · MIC READY` during spoken output. It disappears if the
-listener stops or crashes. The receiving pane says `THIS PANE`; another
+`🎧 PARLEY RECONNECTING` while macOS has no usable input route, and
+`🔊 PARLEY SPEAKING · MIC READY` during spoken output. It disappears if the
+listener stops. The receiving pane says `THIS PANE`; another
 Parley-enabled pane shows `⚠ SENDS TO <name>` so a stale target cannot look
 like a dead microphone. Panes where Parley is off stay uncluttered. `parley
 listen status` reports the target name together with the raw pane id.
 
 ```sh
 brew install whisper-cpp     # one-time
-parley listen on       # from inside the tmux pane running the agent
+parley listen on       # explicitly start or retarget input to this pane
 parley listen status
 parley listen off
 parley enroll          # optional, personalized local trigger matching
 ```
+
+Parley follows macOS audio routing by default. Connecting or disconnecting
+AirPods makes a running listener reopen the new default input without changing
+its target pane. If the route disappears during dictation, that partial turn is
+discarded rather than joining audio from two microphones; listening resumes as
+soon as an input is available. Set `PARLEY_MIC` to an AVFoundation device name
+or index only when you intentionally want to pin one device. A pinned device is
+retried until it returns and does not follow the system default.
+
+Each spoken block starts on macOS' then-current default output. If that default
+changes while a block is playing, Parley stops the stale `afplay` process and
+resumes the unheard portion on the new route. macOS still controls Bluetooth
+profile negotiation and the physical route; Parley handles its own capture and
+playback process lifecycle around those changes.
 
 Defaults: say **"okay computer"**, talk, then **"send it"**. A quiet low tone
 confirms it woke, a soft two-note cue confirms it sent, and a falling tone
@@ -243,7 +274,7 @@ Every knob is an environment variable.
 | `PARLEY_WAKE` | `okay computer` | phrase that starts capture |
 | `PARLEY_SEND` | `send it` | phrase that submits |
 | `PARLEY_STOP_TALKING` | `stop talking` | local interrupt used after the wake phrase during playback |
-| `PARLEY_MIC` | `0` | avfoundation input device index |
+| `PARLEY_MIC` | `default` | macOS default input; a name/index pins one device |
 | `PARLEY_MIC_THRESHOLD` | `500` | raise it in a noisy room |
 | `PARLEY_MIN_SPEECH` | `0.10` | minimum voiced seconds retained for trigger detection |
 | `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | cloud model when an OpenAI key exists |
@@ -281,7 +312,8 @@ That is what makes overlap impossible rather than merely unlikely.
 
 Playback starts with six-tenths of a second of silence, because Bluetooth
 headphones take about that long to switch profiles and will otherwise swallow
-your first few words.
+your first few words. The warm-up mitigates profile-switch latency; it cannot
+make an unavailable AirPods route usable before macOS has connected it.
 
 `~/.parley/speak.log` records what was spoken, in which voice, and how
 long synthesis took. It records message lengths and operational events, not

@@ -22,6 +22,8 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "INTERRUPT", tmp_path / "interrupt")
     monkeypatch.setattr(config, "SKIP", tmp_path / "skip")
     monkeypatch.setattr(indicator, "refresh", lambda: None)
+    monkeypatch.setattr(
+        player.audio_routes, "default_output_device", lambda: None)
 
 
 @pytest.fixture
@@ -133,6 +135,69 @@ def test_local_aiff_audio_is_written_with_the_right_extension(monkeypatch):
     player.play(b"FORM local aiff")
 
     assert launched[0][1].endswith(".aiff")
+
+
+def test_active_speech_restarts_when_default_output_changes(monkeypatch):
+    launched = []
+    remaining = []
+    devices = iter([101, 202, 202])
+
+    class Process:
+        def __init__(self, pid, changes_route):
+            self.pid = pid
+            self.changes_route = changes_route
+            self.terminated = False
+
+        def wait(self, timeout=None):
+            if self.changes_route and timeout is not None and not self.terminated:
+                raise player.subprocess.TimeoutExpired("afplay", timeout)
+            return -15 if self.terminated else 0
+
+        def terminate(self):
+            self.terminated = True
+
+    def popen(argv):
+        process = Process(5000 + len(launched), not launched)
+        launched.append((argv, process))
+        return process
+
+    monkeypatch.setattr(player.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        player.audio_routes,
+        "default_output_device",
+        lambda: next(devices, 202),
+    )
+    monkeypatch.setattr(
+        player,
+        "_remaining_audio",
+        lambda path, offset: remaining.append(offset) or path + ".remaining",
+    )
+
+    assert player.play(b"speech") is True
+
+    assert len(launched) == 2
+    assert launched[0][1].terminated
+    assert remaining and remaining[0] > 0
+
+
+def test_afplay_failure_is_retried_instead_of_reported_as_success(monkeypatch):
+    attempts = []
+
+    class Process:
+        pid = 7000
+
+        def wait(self):
+            return 1 if len(attempts) < 2 else 0
+
+    monkeypatch.setattr(
+        player.subprocess,
+        "Popen",
+        lambda argv: attempts.append(argv) or Process(),
+    )
+    monkeypatch.setattr(player.time, "sleep", lambda seconds: None)
+
+    assert player.play(b"speech") is True
+    assert len(attempts) == 2
 
 
 def test_queue_uses_the_active_provider_voice_and_model(monkeypatch):

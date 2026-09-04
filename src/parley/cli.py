@@ -27,10 +27,13 @@ def build_parser():
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("on", help="speak replies in this session")
-    sub.add_parser("off", help="stop speaking in this session")
-    sub.add_parser("toggle", help="flip this session")
-    sub.add_parser("status", help="show this session's state")
+    sub.add_parser("on", help="start two-way voice in this tmux pane")
+    sub.add_parser("off", help="stop two-way voice in this tmux pane")
+    sub.add_parser("toggle", help="flip two-way voice in this tmux pane")
+    sub.add_parser("status", help="show speech and listening state")
+
+    speak = sub.add_parser("speak", help="control speech output only")
+    speak.add_argument("state", nargs="?", choices=["on", "off", "status"])
 
     default = sub.add_parser("default", help="what new sessions start as")
     default.add_argument("state", nargs="?", choices=["on", "off"])
@@ -47,13 +50,15 @@ def build_parser():
 
     listen = sub.add_parser("listen", help="hands-free voice input")
     listen.add_argument("state", nargs="?", choices=["on", "off", "status", "run"])
-    listen.add_argument("--device", default=os.environ.get("PARLEY_MIC", "0"),
-                        help="avfoundation audio device index")
+    listen.add_argument(
+        "--device", default=os.environ.get("PARLEY_MIC", "default"),
+        help="avfoundation audio device name/index (default follows macOS)")
 
     enroll = sub.add_parser(
         "enroll", help="record a local personalized trigger profile")
-    enroll.add_argument("--device", default=os.environ.get("PARLEY_MIC", "0"),
-                        help="avfoundation audio device index")
+    enroll.add_argument(
+        "--device", default=os.environ.get("PARLEY_MIC", "default"),
+        help="avfoundation audio device name/index (default follows macOS)")
 
     sub.add_parser("stop", help="drop the queue and stop playing")
     sub.add_parser("cues", help="regenerate the notification tones")
@@ -67,6 +72,58 @@ def build_parser():
     indicator = sub.add_parser("indicator", help=argparse.SUPPRESS)
     indicator.add_argument("pane", nargs="?")
     return parser
+
+
+def _report_listener(listener):
+    pid = listener.is_running()
+    print(f"listening: {'on (pid ' + str(pid) + ')' if pid else 'off'}")
+    if not pid:
+        return
+    print(f"  state {listener.listener_state()}")
+    print(
+        f"  personalized triggers "
+        f"{'active' if listener.triggers.enrolled() else 'not enrolled'}")
+    print(f"  wake {listener.WAKE!r} -> speak -> {listener.SEND!r}")
+    pane = listener.get_target()
+    label = listener.indicator.session_label(pane)
+    if label:
+        print(f"  sends to {label} (pane {pane})")
+    else:
+        print(f"  sends to unavailable pane {pane or '(none)'}")
+
+
+def _start_listener(listener, device):
+    pane = os.environ.get("TMUX_PANE", "")
+    if not pane:
+        print("Not inside tmux — there is no pane to type the message into.",
+              file=sys.stderr)
+        raise SystemExit(1)
+    if not listener.whisper_bin():
+        print("whisper-cli not found. Install it with: brew install whisper-cpp",
+              file=sys.stderr)
+        raise SystemExit(1)
+    if not listener.ensure_model():
+        raise SystemExit("could not download the wake-word model")
+    listener.stop()
+    listener.set_follow_active(listener.is_agent_deck_pane(pane))
+    listener.set_target(pane)
+    subprocess.Popen(
+        [sys.argv[0], "listen", "run", "--device", device],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, start_new_session=True)
+    time.sleep(0.6)
+    if not listener.is_running():
+        raise SystemExit("hands-free listener exited during startup")
+    print(f"listening: on — say {listener.WAKE!r}, speak, then {listener.SEND!r}")
+    print(f"  typing into pane {listener.get_target()}")
+
+
+def _stop_owned_listener(listener):
+    """Stop hands-free input only when it belongs to the invoking pane."""
+    pane = os.environ.get("TMUX_PANE", "")
+    if not pane or listener.get_target() != pane:
+        return False
+    return listener.stop()
 
 
 def main(argv=None):
@@ -114,13 +171,12 @@ def main(argv=None):
         print(f"parley default: {'on' if config.DEFAULT.exists() else 'off'}")
         return
 
-    if command in ("on", "off", "toggle", "status"):
+    if command == "speak":
         keys = hooks.session_keys()
-        if command == "toggle":
-            command = "off" if hooks.is_on(keys) else "on"
-        if command == "on":
+        state = args.state or "status"
+        if state == "on":
             hooks.turn_on(keys)
-        elif command == "off":
+        elif state == "off":
             hooks.turn_off(keys)
             stop()
         from parley import indicator
@@ -129,53 +185,50 @@ def main(argv=None):
         _report(keys)
         return
 
+    if command in ("on", "off", "toggle", "status"):
+        from parley import indicator
+        from parley import listen as listener
+
+        keys = hooks.session_keys()
+        if command == "toggle":
+            command = "off" if hooks.is_on(keys) else "on"
+        if command == "on":
+            # Launch input first. A failed full-duplex start must not silently
+            # leave the session in the split speech-only state.
+            try:
+                _start_listener(
+                    listener, os.environ.get("PARLEY_MIC", "default"))
+            except (Exception, SystemExit):
+                hooks.turn_off(keys)
+                indicator.refresh()
+                raise
+            hooks.turn_on(keys)
+        elif command == "off":
+            hooks.turn_off(keys)
+            stop()
+            if _stop_owned_listener(listener):
+                print("listening: stopped")
+
+        indicator.refresh()
+        _report(keys)
+        if command == "status":
+            _report_listener(listener)
+        return
+
     if command == "listen":
         from parley import listen as listener
 
         state = args.state or "status"
         if state == "run":
-            listener.run(args.device)
+            listener.run(args.device, recover_devices=True)
             return
         if state == "off":
             print("listening: stopped" if listener.stop() else "listening: not running")
             return
         if state == "status":
-            pid = listener.is_running()
-            print(f"listening: {'on (pid ' + str(pid) + ')' if pid else 'off'}")
-            if pid:
-                print(f"  state {listener.listener_state()}")
-                print(
-                    f"  personalized triggers "
-                    f"{'active' if listener.triggers.enrolled() else 'not enrolled'}")
-                print(f"  wake {listener.WAKE!r} -> speak -> {listener.SEND!r}")
-                pane = listener.get_target()
-                label = listener.indicator.session_label(pane)
-                if label:
-                    print(f"  sends to {label} (pane {pane})")
-                else:
-                    print(f"  sends to unavailable pane {pane or '(none)'}")
+            _report_listener(listener)
             return
-
-        pane = os.environ.get("TMUX_PANE", "")
-        if not pane:
-            print("Not inside tmux — there is no pane to type the message into.",
-                  file=sys.stderr)
-            raise SystemExit(1)
-        if not listener.whisper_bin():
-            print("whisper-cli not found. Install it with: brew install whisper-cpp",
-                  file=sys.stderr)
-            raise SystemExit(1)
-        if not listener.ensure_model():
-            raise SystemExit("could not download the wake-word model")
-        listener.stop()
-        listener.set_target(pane)
-        subprocess.Popen(
-            [sys.argv[0], "listen", "run", "--device", args.device],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True)
-        time.sleep(0.6)
-        print(f"listening: on — say {listener.WAKE!r}, speak, then {listener.SEND!r}")
-        print(f"  typing into pane {pane}")
+        _start_listener(listener, args.device)
         return
 
     if command == "enroll":
