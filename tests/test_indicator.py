@@ -170,3 +170,52 @@ def test_ensure_appends_badge_to_every_session_and_is_idempotent(monkeypatch):
         call[1:3] == ["set-option", "-t"] and call[4] == "status-right"
         for call in calls
     )
+
+
+def test_json_snapshot_carries_the_state_the_band_draws(monkeypatch, capsys):
+    import json
+
+    from parley import cli
+
+    monkeypatch.setattr(listen, "is_running", lambda: 123)
+    monkeypatch.setattr(listen, "get_target", lambda: "%42")
+    monkeypatch.setattr(listen, "listener_state", lambda: "capturing")
+    monkeypatch.setattr(listen, "speaking", lambda: False)
+    monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
+    monkeypatch.setattr(hooks, "pane_is_on", lambda pane: True)
+
+    cli.main(["indicator", "--json", "%42"])
+    snap = json.loads(capsys.readouterr().out)
+
+    assert snap["state"] == "listening"
+    assert snap["route"] == "this"
+    assert snap["warning"] is False
+    assert snap["text"] == " 🔴 PARLEY LISTENING · THIS PANE "
+    assert snap["wake"] == listen.WAKE and snap["send"] == listen.SEND
+
+
+def test_json_snapshot_is_off_when_the_listener_is_down(monkeypatch, capsys):
+    import json
+
+    from parley import cli
+
+    monkeypatch.setattr(listen, "is_running", lambda: 0)
+
+    cli.main(["indicator", "--json", "%42"])
+
+    assert json.loads(capsys.readouterr().out)["state"] == "off"
+
+
+def test_speaking_and_other_session_states(monkeypatch):
+    monkeypatch.setattr(listen, "is_running", lambda: 123)
+    monkeypatch.setattr(listen, "get_target", lambda: "%42")
+    monkeypatch.setattr(listen, "listener_state", lambda: "ready")
+    monkeypatch.setattr(listen, "speaking", lambda: True)
+    monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
+    monkeypatch.setattr(hooks, "pane_is_on", lambda pane: True)
+
+    snap = indicator.snapshot("%77")
+
+    assert snap["state"] == "speaking"
+    assert snap["route"] == "other" and snap["warning"] is True
+    assert snap["text"] == " ⚠ 🔊 PARLEY SPEAKING · MIC READY · SENDS TO windy-falcon "

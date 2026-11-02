@@ -1,0 +1,9 @@
+{
+  "name": "parley",
+  "version": "0.7.0",
+  "description": "Shows Parley's live hands-free listener state in a band above the Claude Code prompt.",
+  "author": { "name": "Chris Keesey" },
+  "homepage": "https://github.com/c2keesey/parley",
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

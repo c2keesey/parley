@@ -1,4 +1,9 @@
-"""Persistent tmux status badge for the hands-free listener."""
+"""Listener state indicator: the tmux status badge and its JSON snapshot.
+
+The tmux badge polls ``parley indicator <pane>``; the Claude Code band (the
+mod under ``claude_mod/``) reads ``parley indicator --json <pane>``. Both are
+drawn from :func:`snapshot`, so they never disagree.
+"""
 import re
 import subprocess
 
@@ -47,37 +52,71 @@ def _badge():
     return f"{BADGE_STYLE}{command}#[default]"
 
 
-def text(viewing_pane=""):
-    """Badge content, including the listener's current operational state."""
+STATES = {
+    "listening": "🔴 PARLEY LISTENING",
+    "sending": "⏳ PARLEY SENDING",
+    "reconnecting": "🎧 PARLEY RECONNECTING",
+    "speaking": "🔊 PARLEY SPEAKING · MIC READY",
+    "ready": "🎙 PARLEY READY",
+}
+
+
+def snapshot(viewing_pane=""):
+    """The listener's state as data, for the tmux badge and the Claude Code band.
+
+    ``state`` is ``off`` when the badge would be blank: the listener is not
+    running, or the viewing pane does not have Parley on. ``route`` says where
+    a dictated message goes relative to the viewer: ``this`` pane, an
+    ``other`` session (``label`` names it), an ``unavailable`` pane, or
+    ``target`` when no viewing pane was given.
+    """
     from parley import hooks, listen
 
+    off = {"state": "off", "route": "", "label": "", "pane": "",
+           "warning": False, "text": ""}
     if not listen.is_running():
-        return ""
+        return off
     if viewing_pane and not hooks.pane_is_on(viewing_pane):
-        return ""
+        return off
     pane = listen.get_target()
     _target_session, label = _session(pane)
     if viewing_pane and pane == viewing_pane:
-        target = " · THIS PANE"
-        warning = ""
+        route, warning = "this", False
     elif label:
-        target = f" · SENDS TO {label}"
-        warning = "⚠ " if viewing_pane else ""
+        route, warning = ("other" if viewing_pane else "target"), bool(viewing_pane)
     else:
-        target = f" · TARGET {pane or '(none)'} UNAVAILABLE"
-        warning = "⚠ "
-    state = listen.listener_state()
-    if state == "capturing":
-        status = "🔴 PARLEY LISTENING"
-    elif state == "sending":
-        status = "⏳ PARLEY SENDING"
-    elif state == "reconnecting":
-        status = "🎧 PARLEY RECONNECTING"
+        route, warning = "unavailable", True
+    listener = listen.listener_state()
+    if listener == "capturing":
+        state = "listening"
+    elif listener in ("sending", "reconnecting"):
+        state = listener
     elif listen.speaking():
-        status = "🔊 PARLEY SPEAKING · MIC READY"
+        state = "speaking"
     else:
-        status = "🎙 PARLEY READY"
-    return f" {warning}{status}{target} "
+        state = "ready"
+    snap = {"state": state, "route": route, "label": label, "pane": pane,
+            "warning": warning, "wake": listen.WAKE, "send": listen.SEND}
+    snap["text"] = _render(snap)
+    return snap
+
+
+def _render(snap):
+    if snap["state"] == "off":
+        return ""
+    if snap["route"] == "this":
+        target = " · THIS PANE"
+    elif snap["route"] in ("other", "target"):
+        target = f" · SENDS TO {snap['label']}"
+    else:
+        target = f" · TARGET {snap['pane'] or '(none)'} UNAVAILABLE"
+    warning = "⚠ " if snap["warning"] else ""
+    return f" {warning}{STATES[snap['state']]}{target} "
+
+
+def text(viewing_pane=""):
+    """Badge content, including the listener's current operational state."""
+    return snapshot(viewing_pane)["text"]
 
 
 def refresh():

@@ -18,6 +18,8 @@ def isolated(tmp_path, monkeypatch):
         "claude-code": tmp_path / "claude-skills",
         "codex": tmp_path / "codex-skills",
     })
+    # Never touch the developer's real Claude Code plugins from a test.
+    monkeypatch.setattr(hooks, "_claude", lambda: None)
     for var in hooks.SESSION_VARS + ("TMUX_PANE",):
         monkeypatch.delenv(var, raising=False)
 
@@ -190,3 +192,52 @@ def test_malformed_payload_is_survivable(monkeypatch):
     monkeypatch.setattr(hooks, "detach", lambda fn: pytest.fail("should not speak"))
     hooks.handle(argv=["not json at all"])
     hooks.handle(argv=[json.dumps(["a", "list"])])
+
+
+def test_install_enables_the_claude_code_status_band(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hooks, "_claude", lambda: "/bin/claude")
+    monkeypatch.setattr(
+        hooks, "_claude_plugin",
+        lambda claude, *args: calls.append(args) or SimpleNamespace(
+            returncode=0, stdout="", stderr=""))
+
+    hooks.install("claude-code")
+
+    assert calls == [("install", "parley", "--marketplace", str(hooks.MOD_DIR),
+                      "--scope", "user")]
+    assert (hooks.MOD_DIR / ".claude-plugin" / "marketplace.json").exists()
+    assert (hooks.MOD_DIR / "hooks" / "register.tsx").exists()
+
+
+def test_codex_install_leaves_claude_plugins_alone(monkeypatch):
+    monkeypatch.setattr(hooks, "_claude", lambda: "/bin/claude")
+    monkeypatch.setattr(
+        hooks, "_claude_plugin",
+        lambda *a: (_ for _ in ()).throw(AssertionError("must not run")))
+
+    hooks.install("codex")
+
+
+def test_band_install_failure_is_reported_not_raised(monkeypatch, capsys):
+    monkeypatch.setattr(hooks, "_claude", lambda: "/bin/claude")
+    monkeypatch.setattr(
+        hooks, "_claude_plugin",
+        lambda *a: SimpleNamespace(returncode=1, stdout="", stderr="nope"))
+
+    assert hooks.install_mod() is False
+    assert "claude plugin install parley --marketplace" in capsys.readouterr().out
+
+
+def test_uninstall_removes_the_status_band(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hooks, "_claude", lambda: "/bin/claude")
+    monkeypatch.setattr(
+        hooks, "_claude_plugin",
+        lambda claude, *args: calls.append(args) or SimpleNamespace(
+            returncode=0, stdout="", stderr=""))
+
+    hooks.uninstall("claude-code")
+
+    assert calls == [("uninstall", "parley@parley"),
+                     ("marketplace", "remove", "parley")]

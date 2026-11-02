@@ -1,0 +1,12 @@
+{
+  "name": "parley",
+  "owner": { "name": "Chris Keesey" },
+  "metadata": { "description": "Parley, two-way voice for terminal coding agents." },
+  "plugins": [
+    {
+      "name": "parley",
+      "source": "./",
+      "description": "Parley's live listener state, above the Claude Code prompt."
+    }
+  ]
+}

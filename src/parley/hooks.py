@@ -20,6 +20,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from parley import config
 from parley.player import detach, drain, enqueue
@@ -262,6 +263,63 @@ def install_skill(harness=None):
     return installed
 
 
+# The Claude Code mod that draws the listener's live state above the prompt.
+# Installed from its own folder as a local marketplace, so Claude Code reads it
+# in place: an upgraded Parley upgrades the mod with no reinstall.
+MOD_DIR = Path(__file__).parent / "claude_mod"
+MOD_NAME = "parley"
+MOD_MARKETPLACE = "parley"
+
+
+def _claude():
+    return shutil.which("claude")
+
+
+def _claude_plugin(claude, *args):
+    try:
+        return subprocess.run(
+            [claude, "plugin", *args], capture_output=True, text=True,
+            timeout=120, check=False, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as error:
+        return SimpleNamespace(returncode=1, stdout="", stderr=str(error))
+
+
+def install_mod():
+    """Enable the Claude Code status band (the mod in ``claude_mod/``)."""
+    manual = (f"claude plugin install {MOD_NAME} --marketplace {MOD_DIR}")
+    claude = _claude()
+    if not (MOD_DIR / ".claude-plugin" / "plugin.json").exists():
+        return False
+    if not claude:
+        print(f"claude-code: status band not installed (no `claude` on PATH); "
+              f"later run: {manual}")
+        return False
+    result = _claude_plugin(
+        claude, "install", MOD_NAME, "--marketplace", str(MOD_DIR),
+        "--scope", "user")
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout).strip().splitlines()
+        print(f"claude-code: status band not installed "
+              f"({reason[-1] if reason else 'claude plugin install failed'}); "
+              f"try: {manual}")
+        return False
+    print(f"claude-code: status band installed "
+          f"({MOD_NAME}@{MOD_MARKETPLACE}, read from {MOD_DIR})")
+    return True
+
+
+def uninstall_mod():
+    claude = _claude()
+    if not claude:
+        return False
+    removed = _claude_plugin(
+        claude, "uninstall", f"{MOD_NAME}@{MOD_MARKETPLACE}").returncode == 0
+    _claude_plugin(claude, "marketplace", "remove", MOD_MARKETPLACE)
+    if removed:
+        print("claude-code: status band removed")
+    return removed
+
+
 def install(harness=None):
     """Add the Stop hook wherever the harness expects it. Idempotent."""
     installed = []
@@ -287,6 +345,9 @@ def install(harness=None):
         installed.append(name)
         print(f"{name}: installed ({path})")
     install_skill(harness)
+    if harness == "claude-code" or (
+            not harness and TARGETS["claude-code"].parent.exists()):
+        install_mod()
     if not installed and not harness:
         print("Hook already present everywhere it is wanted.")
     return installed
@@ -315,6 +376,8 @@ def uninstall(harness=None):
             _save(path, data)
             removed.append(name)
             print(f"{name}: removed ({path})")
+    if harness in (None, "claude-code"):
+        uninstall_mod()
     if not removed:
         print("No hooks to remove")
     return removed

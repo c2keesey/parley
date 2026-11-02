@@ -42,12 +42,13 @@ belongs to an unrelated project. The installed command remains `parley`.
 Source installation is the supported path until the first PyPI release.
 
 `parley install` writes a `Stop` hook and the `parley` skill into each agent
-present on the machine:
+present on the machine, and for Claude Code also installs the status band
+(below):
 
-| Agent | Hook | Skill |
-|---|---|---|
-| Claude Code | `~/.claude/settings.json` | `~/.claude/skills/parley/` |
-| Codex | `~/.codex/hooks.json` | `~/.codex/skills/parley/` |
+| Agent | Hook | Skill | Status |
+|---|---|---|---|
+| Claude Code | `~/.claude/settings.json` | `~/.claude/skills/parley/` | `parley@parley` band above the prompt, plus the tmux badge |
+| Codex | `~/.codex/hooks.json` | `~/.codex/skills/parley/` | tmux badge |
 
 It is idempotent, leaves any hooks you already have alone, and backs up the
 settings file before writing. Pass `--harness claude-code` or `--harness codex`
@@ -128,8 +129,11 @@ moves the listener target with it. The visible session's badge should therefore
 settle on `THIS PANE`; a pane explicitly armed outside Agent Deck remains a
 static target.
 
-While listening is active, a tmux session shows the state badge only when its
-active pane has Parley turned on:
+While listening is active, every session with Parley turned on shows its
+state. In Claude Code it is a band directly above the prompt; everywhere else
+(Codex, or a Claude Code without the band) it is a badge in the tmux status
+bar. Both draw from the same `parley indicator --json <pane>` snapshot, so they
+always agree:
 `🎙 PARLEY READY` while the wake detector is armed, `🔴 PARLEY LISTENING` while
 capturing dictation, `⏳ PARLEY SENDING` during transcription and submission,
 `🎧 PARLEY RECONNECTING` while macOS has no usable input route, and
@@ -250,6 +254,30 @@ and Security, Microphone.
 Input is typed with `tmux send-keys` against the pane you armed it from, so
 the session must be running inside tmux. That is also why this is agent
 agnostic: it types into the session the same way you would.
+
+### The Claude Code status band
+
+The band is a Claude Code mod that ships inside Parley
+(`src/parley/claude_mod/`). It shows the same state in color with the next
+thing to say: `🎙 PARLEY READY  this pane · say “okay computer”`, then
+`🔴 PARLEY LISTENING  this pane · “send it” to send`. It needs no tmux status
+bar, so it keeps working where a statusline or Agent Deck hides that bar. It
+updates within about a quarter second of a wake, send or reply: rather than run
+Parley on a timer, it stats the few files Parley rewrites on every transition
+and asks `parley indicator --json` again only when one changes, with a
+four-second heartbeat for a listener that died without cleaning up.
+
+`parley install` adds it with `claude plugin install parley --marketplace
+<parley's claude_mod folder>`, which Claude Code reads in place, so upgrading
+Parley upgrades the band. To add or remove it by hand:
+
+```sh
+parley install --harness claude-code      # prints the claude command if it cannot run it
+claude plugin uninstall parley@parley     # parley uninstall does this too
+```
+
+New Claude Code sessions pick it up; in a running one, `/reload-plugins`. The
+tmux badge stays on for every pane either way, as the fallback.
 
 ## Configuration
 

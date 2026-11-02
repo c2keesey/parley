@@ -80,6 +80,7 @@ def build_parser():
     sub.add_parser("hook", help="hook entry point (payload on stdin)")
     indicator = sub.add_parser("indicator", help=argparse.SUPPRESS)
     indicator.add_argument("pane", nargs="?")
+    indicator.add_argument("--json", action="store_true")
     return parser
 
 
@@ -153,9 +154,15 @@ def main(argv=None):
         return
 
     if command == "indicator":
-        from parley.indicator import text
+        from parley import indicator
 
-        print(text(args.pane or ""), end="")
+        if args.json:
+            import json
+
+            print(json.dumps(indicator.snapshot(args.pane or ""),
+                             ensure_ascii=False))
+        else:
+            print(indicator.text(args.pane or ""), end="")
         return
 
     if command == "install":

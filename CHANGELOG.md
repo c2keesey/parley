@@ -3,6 +3,18 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
+## Unreleased
+
+- Added a Claude Code status band: a mod, shipped with Parley and installed by
+  `parley install`, that shows the listener's live state (READY, LISTENING,
+  SENDING, SPEAKING, RECONNECTING), where dictation goes and the next phrase
+  to say, directly above the prompt. It updates within about a quarter second
+  and does not depend on the tmux status bar being visible. The tmux badge
+  remains for Codex and as the fallback.
+- Added `parley indicator --json [pane]`, the state snapshot the badge and the
+  band both draw from.
+- `parley uninstall` removes the band as well.
+
 ## 0.6.0 - 2026-09-04
 
 - Made `parley on` start the complete two-way experience: spoken replies plus
