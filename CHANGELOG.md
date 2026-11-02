@@ -12,6 +12,30 @@ versioning while it is in beta.
   in the plugin's options.
 - The tmux badge now stands aside for a pane the Claude Code band covers, so
   a Claude session never shows the state twice; Codex and other panes keep it.
+- Rebuilt the microphone gate. A fixed RMS 500 threshold only opened on the
+  loudest syllables from a MacBook's built-in microphone (room noise there is
+  about RMS 25), so most wake attempts were dropped as "short audio". The gate
+  now learns the noise floor, uses WebRTC voice-activity detection, has
+  hysteresis, and keeps 300 ms of pre-roll so onsets are not clipped ("send
+  it" heard as "end it").
+- Short bursts said during dictation are now part of the message instead of
+  being discarded.
+- The personalized matcher only adds recall; it no longer rejects bursts
+  before Whisper sees them. It matches the wake phrase at the start of an
+  utterance and send/cancel at its end, trims relative to the burst's own
+  level, rejects implausible enrollment samples, and calibrates thresholds
+  against the other phrases. Earlier profiles never matched and are ignored:
+  run `parley enroll` again.
+- Parley no longer wakes or stops itself when a reply says a trigger phrase.
+- Dictated messages are pasted into the agent as one bracketed paste. Typing
+  long messages key by key lost their beginning in Claude Code.
+- When the cloud transcript drops the words just before "send it", the words
+  local recognition heard there are restored.
+- Added `parley listen meter`, a live microphone level meter, and
+  `parley debug-triggers`, an offline hit/false-wake evaluation over recorded
+  or synthetic bursts. Personalized near-misses are logged with their score
+  and threshold.
+
 - Added a Claude Code status band: a mod, shipped with Parley and installed by
   `parley install`, that shows the listener's live state (READY, LISTENING,
   SENDING, SPEAKING, RECONNECTING), where dictation goes and the next phrase

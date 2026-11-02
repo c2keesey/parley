@@ -26,6 +26,10 @@ def isolate_microphone_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(listen, "TARGET", tmp_path / "target")
     listen.triggers.load.cache_clear()
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
+    # Synthetic test tones are not speech to WebRTC's VAD; the gate's own
+    # tests cover the VAD path. Here the energy gate alone is deterministic.
+    monkeypatch.setattr(listen.gate, "default_vad", lambda: None)
+    monkeypatch.setattr(listen.echo.config, "STATE", tmp_path)
 
 
 def test_active_deck_target_uses_most_recent_human_tmux_client(monkeypatch):
@@ -73,7 +77,7 @@ def test_inject_rechecks_active_target_at_send_time(monkeypatch):
     monkeypatch.setattr(listen.config, "log", lambda message: None)
 
     assert listen.inject("route this")
-    assert calls[0][3] == "%now-focused"
+    assert any(command[-2:] == ["-t", "%now-focused"] for command in calls)
 
 
 @pytest.mark.parametrize("heard", [
@@ -244,23 +248,31 @@ class FakeAudioProcess:
 
 
 def audio_chunks(voiced_frames):
-    loud = b"\xff\x7f" * listen.FRAME
     quiet = b"\x00\x00" * listen.FRAME
+    loud = b"\xff\x7f" * listen.FRAME
     silence_frames = int(listen.END_SILENCE * listen.RATE / listen.FRAME) + 1
-    return [loud] * voiced_frames + [quiet] * silence_frames
+    return [quiet] * 4 + [loud] * voiced_frames + [quiet] * silence_frames
+
+
+def frames_for(seconds):
+    return max(1, round(seconds * listen.RATE / listen.FRAME))
 
 
 def test_fast_command_sized_burst_reaches_local_recognition(monkeypatch):
-    process = FakeAudioProcess(audio_chunks(2))
+    process = FakeAudioProcess(audio_chunks(frames_for(0.3)))
     monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(listen, "speaking", lambda: False)
 
     actual = [burst for burst, _ in listen.bursts() if burst is not None]
 
     assert len(actual) == 1
+    assert not actual[0].short
+    # Pre-roll: the quiet frames just before the onset are kept, so a soft
+    # first consonant is not clipped off the word.
+    assert actual[0][0] == b"\x00\x00" * listen.FRAME
 
 
-def test_click_sized_burst_remains_below_speech_gate(monkeypatch):
+def test_click_sized_burst_never_opens_the_gate(monkeypatch):
     process = FakeAudioProcess(audio_chunks(1))
     logs = []
     monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
@@ -270,7 +282,20 @@ def test_click_sized_burst_remains_below_speech_gate(monkeypatch):
     actual = [burst for burst, _ in listen.bursts() if burst is not None]
 
     assert actual == []
-    assert logs == ["gate ignored short audio voiced=0.06s"]
+    assert logs == []
+
+
+def test_brief_audio_is_yielded_as_short_and_logged(monkeypatch):
+    process = FakeAudioProcess(audio_chunks(frames_for(0.06)))
+    logs = []
+    monkeypatch.setattr(listen.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(listen, "speaking", lambda: False)
+    monkeypatch.setattr(listen.config, "log", logs.append)
+
+    actual = [burst for burst, _ in listen.bursts() if burst is not None]
+
+    assert len(actual) == 1 and actual[0].short
+    assert logs and logs[0].startswith("gate short audio voiced=0.06s")
 
 
 def test_default_input_route_change_reopens_capture(monkeypatch):
@@ -344,13 +369,14 @@ def test_possible_wake_holds_speech_before_local_recognition(monkeypatch):
 
     class RacingAudioStream:
         def __init__(self):
-            self.chunks = iter(audio_chunks(2))
+            self.chunks = iter(audio_chunks(frames_for(0.3)))
             self.reads = 0
 
         def read(self, size):
             chunk = next(self.chunks, b"")
             self.reads += 1
-            if self.reads == 2:
+            # Four quiet frames, then the gate opens on the second loud one.
+            if self.reads == 7:
                 first_frame_claimed.set()
                 assert finish_burst.wait(timeout=1)
             return chunk
@@ -722,13 +748,36 @@ def test_tmux_submission_checks_typing_and_enter(monkeypatch):
     monkeypatch.setattr(listen.config, "log", lambda message: None)
 
     assert listen.inject("run the tests")
+    buffer = f"parley-dictation-{listen.os.getpid()}"
     assert calls == [
-        ["tmux", "send-keys", "-t", "%42", "-l", "run the tests"],
+        ["tmux", "load-buffer", "-b", buffer, "-"],
+        ["tmux", "paste-buffer", "-d", "-p", "-r", "-b", buffer, "-t", "%42"],
         ["tmux", "send-keys", "-t", "%42", "Enter"],
     ]
 
 
-@pytest.mark.parametrize("failure", [0, 1])
+def test_long_dictation_is_pasted_whole_not_typed_key_by_key(monkeypatch):
+    """A 1360-character message typed with send-keys -l lost its head."""
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs.get("input")))
+        return listen.subprocess.CompletedProcess(command, 0)
+
+    message = "This session is going to focus on all the Parley stuff. " * 25
+    monkeypatch.setattr(listen, "get_target", lambda: "%42")
+    monkeypatch.setattr(listen.subprocess, "run", run)
+    monkeypatch.setattr(listen.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(listen.config, "log", lambda message: None)
+
+    assert listen.inject(message)
+    staged = [stdin for command, stdin in calls if "load-buffer" in command]
+    assert staged == [message.strip()]
+    assert not any("-l" in command for command, _ in calls)
+    assert calls[-1][0][-1] == "Enter"
+
+
+@pytest.mark.parametrize("failure", [0, 1, 2])
 def test_tmux_submission_reports_each_failure_without_claiming_success(
         failure, monkeypatch):
     calls = []
@@ -910,3 +959,151 @@ def test_strip_leading_removes_anything_said_before_the_wake_phrase():
     from parley.listen import WAKE, strip_leading
     heard = "the tests are green and I pushed it okay computer stop and check the log"
     assert strip_leading(heard, WAKE) == "stop and check the log"
+
+
+# --- adaptive gate, echo, and message assembly regressions -----------------
+
+def _run_listener(tmp_path, monkeypatch, bursts, heard, cloud=None,
+                  speaking=False, logs=None):
+    sent, actions, cloud_frames = [], [], []
+    monkeypatch.setattr(listen, "LISTEN_PID", tmp_path / "listener.pid")
+    monkeypatch.setattr(listen, "whisper_bin", lambda: "/bin/true")
+    monkeypatch.setattr(listen, "ensure_model", lambda: True)
+    monkeypatch.setattr(listen.indicator, "ensure", lambda: 0)
+    monkeypatch.setattr(listen, "bursts", lambda device: iter(bursts))
+    heard = iter(heard)
+    monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
+    monkeypatch.setattr(
+        listen, "transcribe_cloud",
+        lambda frames: cloud_frames.append(list(frames)) or cloud or "")
+    monkeypatch.setattr(listen, "inject", sent.append)
+    monkeypatch.setattr(listen, "speaking", lambda: speaking)
+    monkeypatch.setattr(listen.player, "skip", lambda: actions.append("skip"))
+    monkeypatch.setattr(listen, "cue", lambda kind: actions.append(kind))
+    monkeypatch.setattr(
+        listen.config, "log",
+        (logs.append if logs is not None else (lambda message: None)))
+    listen.run()
+    return sent, actions, cloud_frames
+
+
+def test_short_bursts_during_dictation_stay_in_the_message(
+        tmp_path, monkeypatch):
+    """A quiet word mid-dictation used to be dropped before the cloud saw it."""
+    short = listen.gate.Burst([b"soft-start"], voiced=0.06, short=True)
+    sent, _, cloud_frames = _run_listener(
+        tmp_path, monkeypatch,
+        [([b"wake"], False), (short, False), ([b"send"], False)],
+        ["okay computer", "send it."],
+        cloud="okay computer check the logs send it")
+
+    assert sent == ["check the logs"]
+    assert cloud_frames == [[b"wake", b"soft-start", b"send"]]
+
+
+def test_short_burst_outside_capture_never_reaches_whisper(
+        tmp_path, monkeypatch):
+    short = listen.gate.Burst([b"click"], voiced=0.06, short=True)
+    sent, actions, _ = _run_listener(
+        tmp_path, monkeypatch, [(short, False)], [])
+
+    assert sent == [] and actions == []
+
+
+def test_personalized_miss_never_blocks_whisper(tmp_path, monkeypatch):
+    """The matcher used to reject every short burst it did not recognise."""
+    monkeypatch.setattr(listen.triggers, "enrolled", lambda: True)
+    monkeypatch.setattr(
+        listen.triggers, "match", lambda frames, allowed: (None, 0.9, 0.3))
+    burst = listen.gate.Burst([b"wake"], voiced=0.13)
+    sent, actions, _ = _run_listener(
+        tmp_path, monkeypatch, [(burst, False), ([b"send"], False)],
+        ["okay computer", "do it send it"],
+        cloud="okay computer do it send it")
+
+    assert sent == ["do it"]
+    assert actions[:1] == ["wake"]
+
+
+def test_personalized_near_miss_is_logged_with_score_and_threshold(
+        tmp_path, monkeypatch):
+    logs = []
+    monkeypatch.setattr(listen.triggers, "enrolled", lambda: True)
+    monkeypatch.setattr(
+        listen.triggers, "match", lambda frames, allowed: (None, 0.36, 0.30))
+    _run_listener(tmp_path, monkeypatch, [([b"x"], False)], ["hello"],
+                  logs=logs)
+
+    assert any(line.startswith("personalized near-miss score=0.360 "
+                               "threshold=0.300") for line in logs)
+
+
+def test_own_playback_saying_the_wake_phrase_does_not_wake(
+        tmp_path, monkeypatch):
+    listen.echo.remember(
+        "To start, say okay computer, then give your request.")
+    logs = []
+    sent, actions, _ = _run_listener(
+        tmp_path, monkeypatch, [([b"echo"], True)],
+        ["say okay computer. give your request."], speaking=True, logs=logs)
+
+    assert actions == []
+    assert "ignored wake phrase echoed from playback" in logs
+
+
+def test_wake_over_unrelated_playback_still_barges_in(tmp_path, monkeypatch):
+    listen.echo.remember("The tests passed and the branch is ready.")
+    _, actions, _ = _run_listener(
+        tmp_path, monkeypatch, [([b"wake"], True)], ["okay computer"],
+        speaking=True)
+
+    assert actions == ["wake"]
+
+
+def test_stop_talking_still_works_over_a_reply_that_mentions_the_wake(
+        tmp_path, monkeypatch):
+    listen.echo.remember("Say okay computer whenever you want me.")
+    _, actions, _ = _run_listener(
+        tmp_path, monkeypatch, [([b"stop"], True)],
+        ["okay computer stop talking"], speaking=True)
+
+    assert actions == ["skip", "stop"]
+
+
+def test_reply_reading_out_the_stop_command_does_not_stop_itself(
+        tmp_path, monkeypatch):
+    listen.echo.remember(
+        "To interrupt me, say okay computer stop talking at any time.")
+    _, actions, _ = _run_listener(
+        tmp_path, monkeypatch, [([b"echo"], True)],
+        ["say okay computer stop talking at any time"], speaking=True)
+
+    assert "skip" not in actions
+
+
+def test_cloud_transcript_that_drops_the_last_sentence_is_repaired(
+        tmp_path, monkeypatch):
+    """2026-11-01 21:11:53: "check on it" was lost before "send it"."""
+    sent, _, _ = _run_listener(
+        tmp_path, monkeypatch,
+        [([b"wake"], False), ([b"message"], False)],
+        ["okay computer.", "so I just did something now. check on it. send it."],
+        cloud="Okay computer, so I just did something now. Send it.")
+
+    assert sent == ["so I just did something now. Check on it"]
+
+
+@pytest.mark.parametrize("cloud, local, expected", [
+    # Agreement: nothing to restore.
+    ("Run the tests.", "run the tests send it", "Run the tests."),
+    # A one-word wording difference is the cloud being more accurate.
+    ("Run the tests now.", "run the test now send it", "Run the tests now."),
+    # Cloud has more than local after the anchor: trust the cloud.
+    ("Fix it and then deploy to staging.", "fix it and then send it",
+     "Fix it and then deploy to staging."),
+    # A clear dropped run is restored.
+    ("Open the file", "open the file and read the header send it",
+     "Open the file. And read the header"),
+])
+def test_dropped_tail_repair_is_conservative(cloud, local, expected):
+    assert listen.repair_dropped_tail(cloud, local) == expected

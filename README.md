@@ -173,18 +173,31 @@ not discard ordinary dictation such as "scratch that migration." Change the
 wake, send, and original cancel phrases with `PARLEY_WAKE`, `PARLEY_SEND`, and
 `PARLEY_CANCEL`.
 
-The local recognizer is biased toward these control phrases, and the audio gate
-is tuned to retain fast command-sized utterances. `send it` ends capture only
+The local recognizer is biased toward these control phrases. The audio gate
+learns your room's noise floor and uses WebRTC voice-activity detection, so a
+quiet built-in microphone and a hot USB one both work without tuning; it keeps
+a moment of audio before each onset so soft first sounds are not clipped. `send it` ends capture only
 when it is trailing, so the same words inside message content are preserved;
 ordinary dictation such as `Sunday` never submits a message.
 
-If trigger recognition is unreliable, run `parley enroll`. Parley guides you
-through several natural repetitions of each control phrase and trains a local
-speaker-personalized acoustic profile. Raw recordings remain in memory; only
-normalized feature templates are saved under `~/.parley/triggers`, with private
-permissions. Personalized matching runs beside tiny Whisper, tolerates changes
-in pace, and considers send/cancel controls only on command-sized utterances so
-mentions inside ordinary dictation remain content.
+If trigger recognition is unreliable, first run `parley listen meter` and speak:
+it shows your microphone level against the gate's noise floor and opening
+level. Then run `parley enroll`. Parley guides you through several natural
+repetitions of each control phrase and trains a local speaker-personalized
+acoustic profile. Raw recordings remain in memory; only normalized feature
+templates are saved under `~/.parley/triggers`, with private permissions.
+Personalized matching only adds recall beside tiny Whisper: a confident match
+is a trigger, anything else is left to Whisper. It looks for the wake phrase at
+the start of an utterance and send/cancel at its end, tolerates changes in
+pace, and ignores the wake phrase while Parley is speaking. Profiles made
+before 0.7 are ignored; enroll again.
+
+To measure recognition, `parley debug-triggers --synthetic [--whisper]`
+replays phrases spoken by macOS voices at several speaking rates, microphone
+gains and noise levels and reports hit and false-wake rates. Start the
+listener with `PARLEY_RECORD_BURSTS=1` to keep labelled trigger bursts in
+`~/.parley/bursts` (private, newest 300) and replay your own voice with
+`parley debug-triggers`. Rename a file's trailing label to correct a miss.
 
 If you say **"okay computer"** again while dictating, the wake tone plays again
 as an audible confirmation that capture is still active. Parley keeps
@@ -203,6 +216,12 @@ confirmation, and is never transcribed or sent as chat.
 The local matcher tolerates narrow transcription variants such as
 `computer`/`computers`; other wake-phrase input keeps the normal
 dictate-and-send flow.
+
+Parley does not wake on its own voice. The player records the text of each
+block it speaks; when the microphone hears a trigger phrase while, or just
+after, Parley says that same phrase, in words that are mostly the reply's own,
+it is ignored. A trigger said over a reply that does not contain it still
+barges in.
 
 Ordinary **"okay computer"** is a conversational pause, not a permanent stop.
 Parley pauses the current response at its present position, gives the
@@ -226,8 +245,9 @@ and billable without improving its reliability.
 Most always-on voice modes either fire constantly or stream your room to a
 paid API. This runs three layers, cheapest first:
 
-1. **An energy gate** over raw microphone frames. No model, no network. Silence
-   costs nothing, which is the whole reason always-on is affordable.
+1. **A speech gate** over raw microphone frames: an adaptive noise floor plus
+   WebRTC's tiny voice-activity detector. No network. Silence costs nothing,
+   which is the whole reason always-on is affordable.
 2. **Local trigger detection.** A tiny Whisper recognizes control phrases and,
    after optional enrollment, a speaker-personalized acoustic matcher provides
    a second path when transcription gets the words wrong. Neither leaves the
@@ -323,8 +343,11 @@ Every knob is an environment variable.
 | `PARLEY_SEND` | `send it` | phrase that submits |
 | `PARLEY_STOP_TALKING` | `stop talking` | local interrupt used after the wake phrase during playback |
 | `PARLEY_MIC` | `default` | macOS default input; a name/index pins one device |
-| `PARLEY_MIC_THRESHOLD` | `500` | raise it in a noisy room |
-| `PARLEY_MIN_SPEECH` | `0.10` | minimum voiced seconds retained for trigger detection |
+| `PARLEY_MIC_THRESHOLD` | `60` | absolute minimum RMS that can open the adaptive gate; leave unset unless the meter says otherwise |
+| `PARLEY_GATE_OPEN_RATIO` | `3.0` | how far above the learned noise floor speech must rise to open the gate |
+| `PARLEY_VAD_MODE` | `2` | WebRTC VAD aggressiveness, 0 (lenient) to 3 (strict); `PARLEY_VAD=off` uses energy only |
+| `PARLEY_MIN_SPEECH` | `0.12` | minimum voiced seconds for a burst to be checked for triggers |
+| `PARLEY_RECORD_BURSTS` | off | `1` keeps labelled trigger bursts in `~/.parley/bursts` for `parley debug-triggers` |
 | `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | cloud model when an OpenAI key exists |
 | `PARLEY_LOCAL_STT_MODEL` | `ggml-base.en.bin` | zero-key local message model, downloaded on first use |
 | `PARLEY_STATE` | `~/.parley` | queue, logs, session flags |
@@ -378,7 +401,8 @@ the text you dictate or the text spoken back.
 Parley has no analytics, account system, or Parley-operated server. The energy
 gate, trigger recognition, personalized matching, cue playback, and session
 routing stay on your Mac. Before the wake phrase, speech bursts may be examined
-by the bundled local trigger recognizer but are not retained.
+by the bundled local trigger recognizer but are not retained, unless you
+explicitly start the listener with `PARLEY_RECORD_BURSTS=1`.
 
 When you explicitly send a dictated message, its captured audio is sent to
 OpenAI for transcription. When speech output is enabled, the reply text is sent

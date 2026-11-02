@@ -58,7 +58,11 @@ def build_parser():
     voices.add_argument("text", nargs="*")
 
     listen = sub.add_parser("listen", help="hands-free voice input")
-    listen.add_argument("state", nargs="?", choices=["on", "off", "status", "run"])
+    listen.add_argument(
+        "state", nargs="?", choices=["on", "off", "status", "run", "meter"])
+    listen.add_argument(
+        "--seconds", type=float,
+        help="meter: stop after this many seconds (default: until Ctrl-C)")
     listen.add_argument(
         "--device", default=os.environ.get("PARLEY_MIC", "default"),
         help="avfoundation audio device name/index (default follows macOS)")
@@ -68,6 +72,20 @@ def build_parser():
     enroll.add_argument(
         "--device", default=os.environ.get("PARLEY_MIC", "default"),
         help="avfoundation audio device name/index (default follows macOS)")
+
+    debug = sub.add_parser(
+        "debug-triggers",
+        help="replay labelled audio and report wake hit / false-wake rates")
+    debug.add_argument(
+        "directory", nargs="?",
+        help="WAV files named *-<label>.wav (default ~/.parley/bursts)")
+    debug.add_argument("--synthetic", action="store_true",
+                       help="generate test speech with macOS voices instead")
+    debug.add_argument("--whisper", action="store_true",
+                       help="also run local tiny Whisper (slower, realistic)")
+    debug.add_argument("--verbose", action="store_true",
+                       help="print one JSON line per clip")
+    debug.add_argument("--json", action="store_true")
 
     sub.add_parser("stop", help="drop the queue and stop playing")
     sub.add_parser("cues", help="regenerate the notification tones")
@@ -90,9 +108,13 @@ def _report_listener(listener):
     if not pid:
         return
     print(f"  state {listener.listener_state()}")
-    print(
-        f"  personalized triggers "
-        f"{'active' if listener.triggers.enrolled() else 'not enrolled'}")
+    if listener.triggers.enrolled():
+        personalized = "active"
+    elif listener.triggers.stale():
+        personalized = "profile is from an older matcher; run parley enroll"
+    else:
+        personalized = "not enrolled"
+    print(f"  personalized triggers {personalized}")
     print(f"  wake {listener.WAKE!r} -> speak -> {listener.SEND!r}")
     pane = listener.get_target()
     label = listener.indicator.session_label(pane)
@@ -241,6 +263,11 @@ def main(argv=None):
         if state == "run":
             listener.run(args.device, recover_devices=True)
             return
+        if state == "meter":
+            from parley import evaluate
+
+            evaluate.meter(args.device, args.seconds)
+            return
         if state == "off":
             print("listening: stopped" if listener.stop() else "listening: not running")
             return
@@ -278,6 +305,14 @@ def main(argv=None):
         print("Personalized triggers: active")
         for name, threshold in metadata["thresholds"].items():
             print(f"  {name}: threshold {threshold:.3f}")
+        return
+
+    if command == "debug-triggers":
+        from parley import evaluate
+
+        evaluate.debug_triggers(
+            args.directory, synthetic=args.synthetic, whisper=args.whisper,
+            verbose=args.verbose, as_json=args.json)
         return
 
     if command == "stop":

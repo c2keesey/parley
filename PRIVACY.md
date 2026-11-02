@@ -5,7 +5,11 @@ Parley-operated backend.
 
 ## What stays on the Mac
 
-- The always-on energy gate and trigger-phrase recognition.
+- The always-on speech gate (noise floor and WebRTC voice-activity detection)
+  and trigger-phrase recognition.
+- Echo suppression. The text of the last few spoken blocks is kept in
+  `~/.parley/spoken-recent.json` (user-only) so the listener can tell
+  Parley's own voice from yours.
 - Personalized trigger matching. Enrollment keeps raw recordings in memory and
   saves only normalized acoustic feature arrays under `~/.parley/triggers`.
 - Session routing, notification cues, and playback coordination.
@@ -13,7 +17,12 @@ Parley-operated backend.
   timing, byte counts, and message lengths—not dictated or spoken message text.
 
 Before a wake phrase is accepted, short speech bursts may be processed by the
-local recognizer and are then discarded. Once capture begins, audio is held in
+local recognizer and are then discarded. Only if you start the listener with
+`PARLEY_RECORD_BURSTS=1` are bursts kept: those heard outside dictation, plus
+the final burst of each dictation (the one ending in the send phrase), as WAV
+files in
+`~/.parley/bursts` (user-only, newest 300), for `parley debug-triggers`.
+Delete that directory to remove them. Once capture begins, audio is held in
 memory until the turn is sent, cancelled, or expires.
 
 ## What leaves the Mac
