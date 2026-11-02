@@ -47,7 +47,7 @@ present on the machine, and for Claude Code also installs the status band
 
 | Agent | Hook | Skill | Status |
 |---|---|---|---|
-| Claude Code | `~/.claude/settings.json` | `~/.claude/skills/parley/` | `parley@parley` band above the prompt, plus the tmux badge |
+| Claude Code | `~/.claude/settings.json` | `~/.claude/skills/parley/` | `parley@parley` band above the prompt (tmux badge elsewhere) |
 | Codex | `~/.codex/hooks.json` | `~/.codex/skills/parley/` | tmux badge |
 
 It is idempotent, leaves any hooks you already have alone, and backs up the
@@ -130,9 +130,9 @@ settle on `THIS PANE`; a pane explicitly armed outside Agent Deck remains a
 static target.
 
 While listening is active, every session with Parley turned on shows its
-state. In Claude Code it is a band directly above the prompt; everywhere else
-(Codex, or a Claude Code without the band) it is a badge in the tmux status
-bar. Both draw from the same `parley indicator --json <pane>` snapshot, so they
+state. In Claude Code it is a band directly above the prompt, and the tmux
+badge stands aside for that pane; everywhere else (Codex, or a Claude Code
+without the band) it is a badge in the tmux status bar. Both draw from the same `parley indicator --json <pane>` snapshot, so they
 always agree:
 `🎙 PARLEY READY` while the wake detector is armed, `🔴 PARLEY LISTENING` while
 capturing dictation, `⏳ PARLEY SENDING` during transcription and submission,
@@ -258,14 +258,32 @@ agnostic: it types into the session the same way you would.
 ### The Claude Code status band
 
 The band is a Claude Code mod that ships inside Parley
-(`src/parley/claude_mod/`). It shows the same state in color with the next
-thing to say: `🎙 PARLEY READY  this pane · say “okay computer”`, then
-`🔴 PARLEY LISTENING  this pane · “send it” to send`. It needs no tmux status
-bar, so it keeps working where a statusline or Agent Deck hides that bar. It
-updates within about a quarter second of a wake, send or reply: rather than run
-Parley on a timer, it stats the few files Parley rewrites on every transition
-and asks `parley indicator --json` again only when one changes, with a
-four-second heartbeat for a listener that died without cleaning up.
+(`src/parley/claude_mod/`). It stays quiet while Parley waits and turns vivid
+only while the microphone is open:
+
+```text
+○ parley  say okay computer                      waiting for the wake phrase
+● parley listening 0:04  send it sends           capturing; the dot breathes
+◑ parley sending                                  transcribing and submitting
+♪ parley speaking  stop talking skips            reading a reply aloud
+↻ parley finding a microphone                    no usable macOS input yet
+○ parley  say okay computer  ⚠ dictation goes to windy-falcon
+```
+
+Colors come from the Claude Code theme (red while listening, amber while
+sending, blue while speaking, grey at idle), so light and dark themes both
+hold. Two other styles are in `/config` under the plugin's options: `chip`, a
+filled pill in the state's color, and `glyph`, the mark and timer alone.
+
+It needs no tmux status bar, so it keeps working where a statusline or Agent
+Deck hides that bar, and while it is drawn the tmux badge stands aside for its
+pane so the state never shows twice (the band keeps a marker in
+`~/.parley/bands/` fresh; Codex and other panes keep the badge). It updates
+within about a quarter second of a wake, send or reply: rather than run Parley
+on a timer, it stats the few files Parley rewrites on every transition and asks
+`parley indicator --json` again only when one changes, with a four-second
+heartbeat for a listener that died without cleaning up. An idle band never
+redraws.
 
 `parley install` adds it with `claude plugin install parley --marketplace
 <parley's claude_mod folder>`, which Claude Code reads in place, so upgrading
@@ -276,8 +294,9 @@ parley install --harness claude-code      # prints the claude command if it cann
 claude plugin uninstall parley@parley     # parley uninstall does this too
 ```
 
-New Claude Code sessions pick it up; in a running one, `/reload-plugins`. The
-tmux badge stays on for every pane either way, as the fallback.
+New Claude Code sessions pick it up; in a running one, `/reload-plugins`.
+Within fifteen seconds of Claude exiting (at once on a clean exit) the pane's
+tmux badge returns.
 
 ## Configuration
 

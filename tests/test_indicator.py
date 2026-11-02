@@ -219,3 +219,49 @@ def test_speaking_and_other_session_states(monkeypatch):
     assert snap["state"] == "speaking"
     assert snap["route"] == "other" and snap["warning"] is True
     assert snap["text"] == " ⚠ 🔊 PARLEY SPEAKING · MIC READY · SENDS TO windy-falcon "
+
+
+def _live(monkeypatch):
+    monkeypatch.setattr(listen, "is_running", lambda: 123)
+    monkeypatch.setattr(listen, "get_target", lambda: "%42")
+    monkeypatch.setattr(listen, "listener_state", lambda: "ready")
+    monkeypatch.setattr(listen, "speaking", lambda: False)
+    monkeypatch.setattr(indicator, "_session", lambda pane: ("$9", "windy-falcon"))
+    monkeypatch.setattr(hooks, "pane_is_on", lambda pane: True)
+
+
+def test_badge_stands_aside_for_a_pane_the_claude_band_covers(
+        monkeypatch, tmp_path):
+    from parley import config
+
+    _live(monkeypatch)
+    monkeypatch.setattr(config, "STATE", tmp_path)
+    marker = tmp_path / "bands" / hooks.pane_key("%42")
+    marker.parent.mkdir()
+    marker.write_text("1")
+
+    assert indicator.text("%42") == ""
+    # Codex or a plain shell in another pane keeps its badge.
+    assert indicator.text("%77").startswith(" ⚠ 🎙 PARLEY READY")
+    # The band's own snapshot is never suppressed.
+    assert indicator.snapshot("%42")["state"] == "ready"
+
+
+def test_badge_returns_once_the_band_marker_is_stale_or_emptied(
+        monkeypatch, tmp_path):
+    import os
+    import time
+
+    from parley import config
+
+    _live(monkeypatch)
+    monkeypatch.setattr(config, "STATE", tmp_path)
+    marker = tmp_path / "bands" / hooks.pane_key("%42")
+    marker.parent.mkdir()
+    marker.write_text("1")
+    old = time.time() - indicator.BAND_FRESH_SECONDS - 1
+    os.utime(marker, (old, old))
+    assert indicator.text("%42") == " 🎙 PARLEY READY · THIS PANE "
+
+    marker.write_text("")
+    assert indicator.text("%42") == " 🎙 PARLEY READY · THIS PANE "

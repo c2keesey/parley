@@ -5,6 +5,13 @@ versioning while it is in beta.
 
 ## Unreleased
 
+- Redesigned the Claude Code band: quiet at idle (a grey mark and the wake
+  phrase), vivid while the microphone is open (a breathing red dot and an
+  elapsed timer), with theme colors that hold in light and dark terminals and
+  the phrase to say next in italic. `chip` and `glyph` styles are available
+  in the plugin's options.
+- The tmux badge now stands aside for a pane the Claude Code band covers, so
+  a Claude session never shows the state twice; Codex and other panes keep it.
 - Added a Claude Code status band: a mod, shipped with Parley and installed by
   `parley install`, that shows the listener's live state (READY, LISTENING,
   SENDING, SPEAKING, RECONNECTING), where dictation goes and the next phrase

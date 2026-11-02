@@ -6,17 +6,28 @@
 // files Parley writes on every transition (cheap stats through the host) and
 // asks Parley again only when one of them changes, plus a slow heartbeat that
 // catches a listener or player that died without cleaning up.
+//
+// While it draws, the mod also keeps bands/<pane key> fresh in Parley's state
+// folder; the tmux badge stands aside for a pane with a fresh marker, so a
+// Claude session never shows the state twice.
+//
+// The look: quiet at idle (one dim glyph and the wake phrase), vivid only
+// while the microphone is open (a breathing red dot and an elapsed timer, like
+// a recorder). Colors are theme keys, so light and dark themes both hold.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ParleySnapshot } from '../types'
+import type { ParleyFrame, ParleySnapshot } from '../types'
 
 const snapshot = atom({ plugin: 'parley', key: 'snapshot' } as const, null)
+const frame = atom({ plugin: 'parley', key: 'frame' } as const, { tick: 0, elapsedMs: 0 })
 
-/** How often the watched files are stat'ed. */
+/** How often the watched files are stat'ed, and the animation's frame. */
 export const TICK_MS = 250
 /** How long a snapshot may stand unchanged before Parley is asked again. */
 export const HEARTBEAT_MS = 4000
+/** How often the band's coverage marker is rewritten (Parley trusts 15 s). */
+export const MARKER_MS = 4000
 
 /** Files and folders under the state directory whose changes mean "ask again". */
 export const WATCHED = [
@@ -31,33 +42,65 @@ export const WATCHED = [
   'microphone-turn.pid',
 ]
 
-type Look = {
-  glyph: string
-  word: string
-  color: 'success' | 'error' | 'warning' | 'suggestion' | 'claude'
+export type Style = 'quiet' | 'chip' | 'glyph'
+
+type State = Exclude<ParleySnapshot['state'], 'off'>
+type Tone = 'inactive' | 'error' | 'warning' | 'permission'
+
+const TONE: Record<State, Tone> = {
+  ready: 'inactive',
+  listening: 'error',
+  sending: 'warning',
+  reconnecting: 'warning',
+  speaking: 'permission',
 }
 
-const LOOKS: Record<Exclude<ParleySnapshot['state'], 'off'>, Look> = {
-  ready: { glyph: '🎙', word: 'READY', color: 'success' },
-  listening: { glyph: '🔴', word: 'LISTENING', color: 'error' },
-  sending: { glyph: '⏳', word: 'SENDING', color: 'warning' },
-  reconnecting: { glyph: '🎧', word: 'RECONNECTING', color: 'warning' },
-  speaking: { glyph: '🔊', word: 'SPEAKING', color: 'claude' },
+const WORD: Record<State, string> = {
+  ready: 'ready',
+  listening: 'listening',
+  sending: 'sending',
+  reconnecting: 'finding a microphone',
+  speaking: 'speaking',
 }
 
-/** The words after the state: where dictation goes, and what to say next. */
-export function detail(snap: ParleySnapshot): string {
-  let route: string
-  if (snap.route === 'this') route = 'this pane'
-  else if (snap.route === 'unavailable') route = `target ${snap.pane || '(none)'} unavailable`
-  else route = `sends to ${snap.label}`
+const SPINNER = ['◐', '◓', '◑', '◒']
 
-  let hint = ''
-  if (snap.state === 'ready' && snap.wake) hint = `say “${snap.wake}”`
-  else if (snap.state === 'listening' && snap.send) hint = `“${snap.send}” to send`
-  else if (snap.state === 'speaking') hint = 'mic ready'
+/** States that move: the band redraws on the frame clock only for these. */
+export const ANIMATED: ReadonlySet<string> = new Set(['listening', 'sending', 'reconnecting'])
 
-  return [route, hint].filter(Boolean).join(' · ')
+/** The state's mark for this frame: a breath, a spinner, or a still glyph. */
+export function glyph(state: State, tick: number): { mark: string; isDim: boolean } {
+  if (state === 'listening') return { mark: '●', isDim: tick % 4 >= 2 }
+  if (state === 'sending') return { mark: SPINNER[tick % SPINNER.length] ?? '◐', isDim: false }
+  if (state === 'reconnecting') return { mark: '↻', isDim: tick % 4 >= 2 }
+  if (state === 'speaking') return { mark: '♪', isDim: false }
+  return { mark: '○', isDim: false }
+}
+
+/** Everything a frame draws, as one string: equal strings, no redraw. */
+export function look(state: State, tick: number, elapsedMs: number): string {
+  const { mark, isDim } = glyph(state, tick)
+  return `${mark}${isDim}${state === 'listening' ? clock(elapsedMs) : ''}`
+}
+
+export function clock(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+/** The phrase to say next, or none: `[before, phrase, after]`. */
+export function hint(snap: ParleySnapshot): [string, string, string] | null {
+  if (snap.state === 'ready' && snap.wake) return ['say ', snap.wake, '']
+  if (snap.state === 'listening' && snap.send) return ['', snap.send, ' sends']
+  if (snap.state === 'speaking' && snap.stop) return ['', snap.stop, ' skips']
+  return null
+}
+
+/** Where dictation goes, when it is not simply here. */
+export function route(snap: ParleySnapshot): string | null {
+  if (snap.route === 'other' || snap.route === 'target') return `dictation goes to ${snap.label}`
+  if (snap.route === 'unavailable') return 'dictation target is gone, run parley on here'
+  return null
 }
 
 export function parse(stdout: string): ParleySnapshot | null {
@@ -67,6 +110,10 @@ export function parse(stdout: string): ParleySnapshot | null {
   } catch {
     return null
   }
+}
+
+export function paneKey(pane: string): string {
+  return 'pane-' + pane.replace(/[^A-Za-z0-9_-]/g, '_')
 }
 
 async function signature($: EngineInterface, dir: string): Promise<string> {
@@ -81,11 +128,17 @@ async function signature($: EngineInterface, dir: string): Promise<string> {
   return marks.join('|')
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const style: Style =
+    options.style === 'chip' || options.style === 'glyph' ? options.style : 'quiet'
+  let marker = ''
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
 
-    const pane = (await $.env.get('TMUX_PANE')) ?? ''
+    // PARLEY_PANE stands in for TMUX_PANE where a session must be kept apart
+    // from Parley's own pane detection (Parley's tests do this).
+    const pane = (await $.env.get('PARLEY_PANE')) || (await $.env.get('TMUX_PANE')) || ''
     const home = (await $.env.get('HOME')) ?? ''
     const dir = (await $.env.get('PARLEY_STATE')) || `${home}/.parley`
     const bin = (await $.env.get('PARLEY_BIN')) || 'parley'
@@ -96,11 +149,16 @@ export const register: Register = on => {
       await update($, snapshot, () => null)
       return started
     }
+    marker = `${dir}/bands/${paneKey(pane)}`
 
     let last = ''
     let lastText = ''
     let askedAt = 0
+    let markedAt = -Infinity
     let isAsking = false
+    let shown = ''
+    let since = 0
+    let tick = 0
 
     const ask = async () => {
       isAsking = true
@@ -126,19 +184,50 @@ export const register: Register = on => {
       }
     }
 
-    const tick = async () => {
+    const step = async () => {
       if (isAsking) return
-      const marks = await signature($, dir)
       const now = await $.clock.now()
+
+      if (now - markedAt >= MARKER_MS) {
+        markedAt = now
+        await $.fs.write(marker, String(now)).catch(() => undefined)
+      }
+
+      const marks = await signature($, dir)
       if (marks !== last || now - askedAt >= HEARTBEAT_MS) {
         last = marks
         await ask()
       }
+
+      // The frame clock: restart on a new state, and move only while the
+      // state itself moves, so an idle band never redraws.
+      const state = (await read($, snapshot))?.state ?? 'off'
+      if (state !== shown) {
+        shown = state
+        since = now
+        tick = 0
+        await update($, frame, () => ({ tick, elapsedMs: 0 }))
+      } else if (ANIMATED.has(state)) {
+        // Redraw only when what is drawn changes: the breath every other
+        // tick, the timer once a second, the spinner every tick.
+        const was = look(state as State, tick, now - since - TICK_MS)
+        tick += 1
+        const moved: ParleyFrame = { tick, elapsedMs: now - since }
+        if (look(state as State, tick, moved.elapsedMs) !== was) {
+          await update($, frame, () => moved)
+        }
+      }
     }
 
-    await tick()
-    $.clock.every(TICK_MS, tick)
+    await step()
+    $.clock.every(TICK_MS, step)
     return started
+  })
+
+  on('session.end', async ($, e, next) => {
+    // An emptied marker hands the pane back to the tmux badge at once.
+    if (marker) await $.fs.write(marker, '').catch(() => undefined)
+    return next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -148,20 +237,89 @@ export const register: Register = on => {
     }
 
     const { Box, Text } = $.ui.resolve(e)
-    const look = LOOKS[snap.state]
+    const state = snap.state
+    const tone = TONE[state]
+    const { tick, elapsedMs } = ANIMATED.has(state) ? await read($, frame) : { tick: 0, elapsedMs: 0 }
+    const { mark, isDim } = glyph(state, tick)
+    const isIdle = state === 'ready'
+    const timer = state === 'listening' ? clock(elapsedMs) : null
+    const said = hint(snap)
+    const away = route(snap)
     const below = await next(e)
+
+    // The phrase itself is the one thing at full strength: dim words around
+    // it, the words to say in plain italic.
+    const phrase = said ? (
+      <Text>
+        {said[0] ? <Text dimColor>{said[0]}</Text> : null}
+        <Text italic>{said[1]}</Text>
+        {said[2] ? <Text dimColor>{said[2]}</Text> : null}
+      </Text>
+    ) : null
+
+    const warning = away ? (
+      <Text color="warning" wrap="truncate-end">
+        ⚠ {away}
+      </Text>
+    ) : null
+
+    let line
+    if (style === 'chip') {
+      // A filled pill in the state's color; at idle, an outline-quiet one.
+      line = (
+        <Box flexDirection="row" gap={2}>
+          <Text
+            backgroundColor={isIdle ? undefined : tone}
+            color={isIdle ? 'inactive' : 'inverseText'}
+            bold={!isIdle}
+          >
+            {' '}
+            {mark} {WORD[state]}
+            {timer ? ` ${timer}` : ''}{' '}
+          </Text>
+          {phrase}
+          {warning}
+        </Box>
+      )
+    } else if (style === 'glyph') {
+      // The least ink: the mark and the timer, words only for a problem.
+      line = (
+        <Box flexDirection="row" gap={1}>
+          <Text color={tone} dimColor={isDim}>
+            {mark}
+          </Text>
+          {timer ? <Text color={tone}>{timer}</Text> : null}
+          {warning}
+        </Box>
+      )
+    } else {
+      // quiet: a wordmark, the state, and the phrase to say next.
+      line = (
+        <Box flexDirection="row" gap={2}>
+          <Text>
+            <Text color={tone} dimColor={isDim}>
+              {mark}
+            </Text>{' '}
+            <Text dimColor={isIdle} bold={!isIdle}>
+              parley
+            </Text>
+            {isIdle ? null : (
+              <Text color={tone}>
+                {' '}
+                {WORD[state]}
+                {timer ? <Text dimColor> {timer}</Text> : null}
+              </Text>
+            )}
+          </Text>
+          {phrase}
+          {warning}
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" gap={1}>
-          {snap.warning ? <Text color="warning">⚠</Text> : null}
-          <Text color={look.color} bold>
-            {look.glyph} PARLEY {look.word}
-          </Text>
-          <Text color={snap.warning ? 'warning' : undefined} dimColor={!snap.warning} wrap="truncate-end">
-            {detail(snap)}
-          </Text>
-        </Box>
+        {line}
         {below ?? null}
       </Box>
     )

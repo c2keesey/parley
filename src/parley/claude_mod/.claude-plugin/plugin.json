@@ -2,8 +2,23 @@
   "name": "parley",
   "version": "0.7.0",
   "description": "Shows Parley's live hands-free listener state in a band above the Claude Code prompt.",
-  "author": { "name": "Chris Keesey" },
+  "author": {
+    "name": "Chris Keesey"
+  },
   "homepage": "https://github.com/c2keesey/parley",
   "license": "MIT",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "style": {
+      "type": "string",
+      "title": "Band style",
+      "description": "quiet: a dim wordmark at idle, a breathing red dot and timer while listening. chip: a filled pill in the state's color. glyph: the mark and timer alone.",
+      "default": "quiet",
+      "options": [
+        "quiet",
+        "chip",
+        "glyph"
+      ]
+    }
+  }
 }

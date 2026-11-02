@@ -14,6 +14,11 @@ BADGE_PATTERN = re.compile(
     r"#\(parley indicator(?: '[^']*')?\)#\[default\]"
 )
 MIN_STATUS_RIGHT_LENGTH = 220
+# The Claude Code band rewrites bands/<pane key> every few seconds while it is
+# drawn in that pane. A marker this fresh means the band covers the pane and
+# the tmux badge stands aside; once Claude exits the marker goes stale (or is
+# emptied) and the badge comes back.
+BAND_FRESH_SECONDS = 15
 
 
 def _run(argv, timeout=2):
@@ -96,7 +101,8 @@ def snapshot(viewing_pane=""):
     else:
         state = "ready"
     snap = {"state": state, "route": route, "label": label, "pane": pane,
-            "warning": warning, "wake": listen.WAKE, "send": listen.SEND}
+            "warning": warning, "wake": listen.WAKE, "send": listen.SEND,
+            "stop": listen.STOP_TALKING}
     snap["text"] = _render(snap)
     return snap
 
@@ -114,8 +120,30 @@ def _render(snap):
     return f" {warning}{STATES[snap['state']]}{target} "
 
 
+def band_covers(pane):
+    """True while the Claude Code band is drawing Parley's state in ``pane``."""
+    import time
+
+    from parley import config, hooks
+
+    if not pane:
+        return False
+    marker = config.STATE / "bands" / hooks.pane_key(pane)
+    try:
+        fresh = time.time() - marker.stat().st_mtime < BAND_FRESH_SECONDS
+        return fresh and bool(marker.read_text().strip())
+    except OSError:
+        return False
+
+
 def text(viewing_pane=""):
-    """Badge content, including the listener's current operational state."""
+    """Badge content, including the listener's current operational state.
+
+    Blank for a pane the Claude Code band already covers, so a Claude session
+    never shows the state twice; Codex and other panes keep the badge.
+    """
+    if band_covers(viewing_pane):
+        return ""
     return snapshot(viewing_pane)["text"]
 
 

@@ -8,10 +8,14 @@ export type ParleySnapshot = {
   text: string
   wake?: string
   send?: string
+  stop?: string
 }
+
+/** The animation clock: ticks while a state moves, and time in that state. */
+export type ParleyFrame = { tick: number; elapsedMs: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    parley: { snapshot: ParleySnapshot | null }
+    parley: { snapshot: ParleySnapshot | null; frame: ParleyFrame }
   }
 }

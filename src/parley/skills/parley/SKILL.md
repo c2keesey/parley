@@ -26,11 +26,12 @@ While voice is on:
 For hands-free input, the user says "okay computer", speaks, then "send it",
 and the message is typed into the session. "scratch that" or "scrap that" as
 a standalone utterance discards a message in progress. A status indicator in
-Parley-enabled sessions (in Claude Code, a band above the prompt; elsewhere, a
-tmux badge)
-distinguishes READY, LISTENING, SENDING, and SPEAKING · MIC READY, and names
-the receiving session. RECONNECTING means Parley is waiting for a usable macOS
-input after a device change. Panes with Parley turned off show no indicator.
+Parley-enabled sessions (in Claude Code, a band above the prompt, which
+replaces the tmux badge for that pane; elsewhere, a tmux badge) distinguishes
+ready, listening (with an elapsed timer in the band), sending, and speaking
+with the mic still open, and warns when dictation would go to another
+session. Reconnecting means Parley is waiting for a usable macOS input after
+a device change. Panes with Parley turned off show no indicator.
 In Agent Deck, the listener follows the session shown by the most recently
 active human terminal client and rechecks it when sending; background control
 clients cannot redirect dictation. In plain tmux it stays on the pane where
