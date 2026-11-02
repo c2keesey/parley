@@ -2,8 +2,9 @@
 
 Three layers, cheapest first, so nothing expensive runs while the room is quiet:
 
-  1. An energy gate over raw microphone frames. No model, no network. Silence
-     costs nothing, which is what makes always-on affordable.
+  1. A speech gate over raw microphone frames (gate.py): an adaptive noise
+     floor plus WebRTC's tiny VAD. No network. Silence costs nothing, which
+     is what makes always-on affordable.
   2. A tiny local whisper over each speech burst, looking only for the wake or
      send phrase. Runs on speech, never on wall-clock time.
   3. An accurate cloud model, or a larger local Whisper model without an API
@@ -23,22 +24,26 @@ active playback it silences Parley immediately and is never sent to an agent.
 """
 import os
 import shutil
-import struct
 import subprocess
 import tempfile
 import time
 import wave
 from pathlib import Path
 
-from parley import audio, config, cues, indicator, player, triggers
+from parley import audio, config, cues, echo, gate, indicator, player, triggers
+from parley.gate import rms  # noqa: F401  (re-exported for callers and tests)
 
-RATE = 16000
-FRAME = 1024
-SPEECH_RMS = int(os.environ.get("PARLEY_MIC_THRESHOLD", "500"))
-MIN_SPEECH = float(os.environ.get("PARLEY_MIN_SPEECH", "0.10"))
-END_SILENCE = 0.7        # seconds of quiet that ends a burst
-INTERRUPT_SILENCE = 0.25 # quicker burst completion while speech is playing
-MAX_BURST = 15.0         # hard cap on a single burst
+RATE = gate.RATE
+FRAME = gate.FRAME
+END_SILENCE = gate.END_SILENCE
+INTERRUPT_SILENCE = gate.INTERRUPT_SILENCE
+MAX_BURST = gate.MAX_BURST
+# Personalized near-misses within this factor of the threshold are logged.
+NEAR_MISS = 1.35
+# Opt-in local recording of bursts for `parley debug-triggers`. Off by default.
+RECORD_BURSTS = os.environ.get("PARLEY_RECORD_BURSTS", "") not in {"", "0"}
+BURSTS_DIR = config.STATE / "bursts"
+RECORD_LIMIT = int(os.environ.get("PARLEY_RECORD_LIMIT", "300"))
 SILENCE_TIMEOUT = float(os.environ.get("PARLEY_SILENCE_TIMEOUT", "120"))
 HARD_STOP = float(os.environ.get("PARLEY_HARD_STOP", "1200"))
 
@@ -275,6 +280,71 @@ def strip_leading(text, phrase):
     return text.strip()
 
 
+def stop_variants():
+    """Word sequences of the stop command, for the playback echo check."""
+    action = normalize(STOP_TALKING)
+    return tuple(tuple(list(wake) + action) for wake in wake_targets()) + (
+        tuple(action),)
+
+
+def burst_summary(burst):
+    describe = getattr(burst, "describe", None)
+    return describe() if describe else f"frames={len(burst)}"
+
+
+def _tokens(text):
+    """(original token, normalized form) pairs, dropping bare punctuation."""
+    pairs = []
+    for token in (text or "").split():
+        key = "".join(normalize(token.replace("'", "").replace("’", "")))
+        if key:
+            pairs.append((token, key))
+    return pairs
+
+
+def repair_dropped_tail(message, final_heard):
+    """Restore words the cloud transcript dropped just before the send phrase.
+
+    The final burst is the one local Whisper recognised the send phrase in, so
+    its local transcript is known to be decent. If the words right before that
+    send phrase are missing from the end of the cloud message, the cloud model
+    dropped them: on 2026-11-01 "so I just did something now. check on it.
+    send it." was submitted as "so I just did something now". Those local
+    words are appended. Small wording differences are left alone; only a
+    clear run of at least two missing words, after an anchor the two
+    transcripts agree on, is restored.
+    """
+    import difflib
+
+    tail_text = strip_phrase(strip_wake_phrases(final_heard or ""), SEND)
+    tail = _tokens(tail_text)
+    cloud = _tokens(message)
+    if len(tail) < 2 or not cloud:
+        return message
+    matcher = difflib.SequenceMatcher(
+        None, [key for _, key in cloud], [key for _, key in tail],
+        autojunk=False)
+    blocks = [block for block in matcher.get_matching_blocks() if block.size]
+    if not blocks:
+        return message
+    last = blocks[-1]
+    # The anchor must be the end of the cloud text; otherwise the cloud has
+    # more after it and the local transcript is the one that diverged.
+    if last.a + last.size != len(cloud) or last.size < 2:
+        return message
+    missing = tail[last.b + last.size:]
+    if len(missing) < 2:
+        return message
+    restored = " ".join(token for token, _ in missing).strip(" ,")
+    base = message.rstrip()
+    joiner = " " if base.endswith(",") else ". "
+    if not base.endswith(","):
+        restored = restored[:1].upper() + restored[1:]
+        base = base.rstrip(".!?")
+    config.log(f"restored {len(missing)} words the cloud transcript dropped")
+    return f"{base}{joiner}{restored}".strip(" ,.")
+
+
 def write_wav(frames, path):
     with wave.open(str(path), "wb") as handle:
         handle.setnchannels(1)
@@ -457,19 +527,43 @@ def sync_target():
     return active
 
 
+PASTE_BUFFER = "parley-dictation"
+
+
 def inject(text):
-    """Type the message into the session's pane and submit it."""
+    """Paste the message into the session's pane and submit it.
+
+    The message goes through a tmux paste buffer as one bracketed paste rather
+    than through ``send-keys -l``. Typing a long dictation key by key into a
+    busy TUI lost its head: Claude Code received 1360 characters as a stream of
+    keystrokes while it was still redrawing and kept only the tail. A
+    bracketed paste arrives as a single paste event, so the agent's input
+    either receives the whole message or none of it.
+    """
     pane = sync_target()
     if not pane or not text:
         return False
-    typed = subprocess.run(
-        ["tmux", "send-keys", "-t", pane, "-l", text],
+    text = " ".join(text.split())
+    buffer = f"{PASTE_BUFFER}-{os.getpid()}"
+    loaded = subprocess.run(
+        ["tmux", "load-buffer", "-b", buffer, "-"],
+        input=text, capture_output=True, text=True, check=False,
+    )
+    if loaded.returncode != 0:
+        config.log(f"submission failed: could not stage text for {pane}")
+        return False
+    pasted = subprocess.run(
+        ["tmux", "paste-buffer", "-d", "-p", "-r", "-b", buffer, "-t", pane],
         capture_output=True, text=True, check=False,
     )
-    if typed.returncode != 0:
-        config.log(f"submission failed: could not type into {pane}")
+    if pasted.returncode != 0:
+        subprocess.run(["tmux", "delete-buffer", "-b", buffer],
+                       capture_output=True, text=True, check=False)
+        config.log(f"submission failed: could not paste into {pane}")
         return False
-    time.sleep(0.15)
+    # Let the agent finish ingesting the paste before Enter, longer for long
+    # messages; an Enter that overtakes the paste would submit a fragment.
+    time.sleep(min(1.0, 0.25 + len(text) / 4000))
     submitted = subprocess.run(
         ["tmux", "send-keys", "-t", pane, "Enter"],
         capture_output=True, text=True, check=False,
@@ -499,14 +593,6 @@ def set_listener_state(state):
     indicator.refresh()
 
 
-def rms(chunk):
-    usable = len(chunk) // 2 * 2
-    if usable < 2:
-        return 0
-    samples = struct.unpack(f"{usable // 2}h", chunk[:usable])
-    return int((sum(s * s for s in samples) / len(samples)) ** 0.5)
-
-
 def _stop_capture(process):
     """Terminate and reap an FFmpeg capture process without hanging shutdown."""
     process.terminate()
@@ -520,7 +606,8 @@ def _stop_capture(process):
         wait()
 
 
-def bursts(device="default", reserve_output=True, reconnect=False):
+def bursts(device="default", reserve_output=True, reconnect=False,
+           gate_factory=None):
     """Yield (frames, was_playing) per speech burst, plus idle heartbeats.
 
     Bursts are still collected while the agent is speaking. Dropping them was
@@ -529,17 +616,24 @@ def bursts(device="default", reserve_output=True, reconnect=False):
     can require the wake phrase before trusting audio that may contain the
     agent's own voice.
 
+    Bursts too short to be a phrase are yielded too, as a gate.Burst with
+    ``short`` set: they must not wake anything, but mid-dictation they are the
+    quiet start or end of a sentence and belong in the message.
+
     A (None, False) heartbeat is yielded about once a second so timeouts can
     fire during silence, when no burst would ever arrive.
     """
     ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
     frame_seconds = FRAME / RATE
+    make_gate = gate_factory or gate.SpeechGate
+    # The noise floor survives a microphone reopen; the room has not changed.
+    speech_gate = make_gate()
     while True:
         process = None
-        buffer, voiced, quiet, overlapped = [], 0.0, 0.0, False
         provisional_turn = False
         capture_ready = False
         since_beat = 0.0
+        playing, since_playing_check = False, 1.0
         selected_default = (
             audio.default_input_device() if device == "default" else None
         )
@@ -567,44 +661,31 @@ def bursts(device="default", reserve_output=True, reconnect=False):
                                 "default input changed; reopening microphone")
                             break
                     yield None, False
-                if rms(chunk) <= SPEECH_RMS:
-                    if buffer:
-                        buffer.append(chunk)
-                        quiet += frame_seconds
-                        end_silence = (
-                            INTERRUPT_SILENCE if overlapped else END_SILENCE
-                        )
-                        if quiet >= end_silence or voiced >= MAX_BURST:
-                            if voiced >= MIN_SPEECH:
-                                provisional_turn = False
-                                yield buffer, overlapped
-                            elif voiced >= 0.05:
-                                config.log(
-                                    "gate ignored short audio "
-                                    f"voiced={voiced:.2f}s")
-                            if provisional_turn:
-                                player.resume()
-                                provisional_turn = False
-                            buffer, voiced, quiet, overlapped = (
-                                [], 0.0, 0.0, False
-                            )
+                # Playback state costs a few file reads. Ten checks a second
+                # are plenty while idle; inside a burst check every frame.
+                since_playing_check += frame_seconds
+                if since_playing_check >= 0.1 or speech_gate.open:
+                    since_playing_check = 0.0
+                    playing = speaking()
+                event, burst = speech_gate.feed(chunk, playing)
+                if event == "start":
+                    # A reply can finish synthesizing after the user starts
+                    # the wake utterance but before tiny Whisper recognizes
+                    # it. Claim the microphone on the first voiced frame so
+                    # that reply stays behind the same gate as an established
+                    # dictation turn. Do not pause output that was already
+                    # audible: that remains the validated wake phrase's job,
+                    # or Parley's own voice would repeatedly pause itself.
+                    if reserve_output and not player.output_playing():
+                        player.pause()
+                        provisional_turn = True
                     continue
-                # A reply can finish synthesizing after the user starts the
-                # wake utterance but before tiny Whisper recognizes it. Claim
-                # the microphone on the first voiced frame so that reply stays
-                # behind the same gate as an established dictation turn. Do
-                # not pause output that was already audible: that remains the
-                # validated wake phrase's job, or Parley's own voice would
-                # repeatedly pause itself.
-                if (not buffer and reserve_output
-                        and not player.output_playing()):
-                    player.pause()
-                    provisional_turn = True
-                buffer.append(chunk)
-                voiced += frame_seconds
-                quiet = 0.0
-                if speaking():
-                    overlapped = True
+                if burst is None:
+                    continue
+                if burst.short and burst.voiced >= gate.SHORT_SPEECH:
+                    config.log(f"gate short audio {burst.describe()}")
+                provisional_turn = False
+                yield burst, burst.overlapped
         except OSError as exc:
             if not reconnect:
                 raise
@@ -618,6 +699,27 @@ def bursts(device="default", reserve_output=True, reconnect=False):
             return
         yield None, "capture-reset"
         time.sleep(1)
+
+
+def record_burst(frames, label):
+    """Keep a burst for offline evaluation, only when explicitly enabled.
+
+    Recordings stay in a private local directory, capped to the newest
+    RECORD_LIMIT files. Rename a file's label to correct it before running
+    ``parley debug-triggers``.
+    """
+    if not RECORD_BURSTS or not frames:
+        return
+    try:
+        config.private_directory(BURSTS_DIR)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        path = BURSTS_DIR / f"{stamp}-{time.time_ns() % 10**6:06d}-{label}.wav"
+        write_wav(frames, path)
+        os.chmod(path, 0o600)
+        for old in sorted(BURSTS_DIR.glob("*.wav"))[:-RECORD_LIMIT]:
+            old.unlink(missing_ok=True)
+    except OSError as exc:
+        config.log(f"burst recording failed: {exc}")
 
 
 def run(device="default", recover_devices=False):
@@ -636,13 +738,19 @@ def run(device="default", recover_devices=False):
     personalized_active = triggers.enrolled()
     if personalized_active:
         config.log("personalized triggers active")
+    elif triggers.stale():
+        config.log("personalized triggers off: profile predates the current "
+                   "matcher; run parley enroll")
+    vad = gate.default_vad()
+    config.log(f"speech gate vad={'webrtc' if vad else 'energy-only'} "
+               f"min_rms={gate.MIN_RMS} open_ratio={gate.OPEN_RATIO}")
     indicator.ensure()
 
     capturing, captured, started, last_heard = False, [], 0.0, 0.0
     last_indicator = time.time()
     last_target_sync = 0.0
 
-    def finish(frames):
+    def finish(frames, final_heard=""):
         set_listener_state("sending")
         cue("send")
         try:
@@ -651,7 +759,12 @@ def run(device="default", recover_devices=False):
             except Exception as exc:
                 config.log(f"transcription failed: {exc}")
                 return
+            config.log(f"transcript words={len(spoken.split())}")
             message = strip_phrase(strip_wake_phrases(spoken), SEND)
+            # Only the burst that ended the dictation is compared: its local
+            # transcript is what told us the message was over.
+            if final_heard:
+                message = repair_dropped_tail(message, final_heard)
             config.log(f"message {message[:80]!r}")
             if message:
                 inject(message)
@@ -718,30 +831,45 @@ def run(device="default", recover_devices=False):
             if burst is None:
                 continue
 
+            # Too brief to be a command. Outside capture it is a click or a
+            # breath. Inside capture it is the soft start or end of a
+            # sentence, and dropping it lost words ("send it" became "end it").
+            if getattr(burst, "short", False):
+                if capturing:
+                    captured.extend(burst)
+                    last_heard = now
+                else:
+                    player.resume()
+                continue
+
             allowed = ("wake", "send", "cancel", "stop") if capturing else (
                 "wake", "stop")
+            # The personalized matcher only ever adds recall: a confident
+            # match is a hit, anything else goes on to Whisper unchanged.
             personalized = None
             if personalized_active:
                 personalized, score, threshold = triggers.match(burst, allowed)
-                if personalized:
+                if personalized == "wake" and overlapped:
+                    # Acoustic templates cannot tell Parley's voice saying the
+                    # wake phrase from yours; Whisper plus the echo check can.
+                    config.log(
+                        f"personalized wake ignored during playback "
+                        f"score={score:.3f} threshold={threshold:.3f}")
+                    personalized = None
+                elif personalized:
                     config.log(
                         f"personalized trigger={personalized} score={score:.3f} "
                         f"threshold={threshold:.3f}")
-
-            voiced_seconds = sum(
-                rms(frame) > SPEECH_RMS for frame in burst) * FRAME / RATE
-            if (personalized_active and voiced_seconds < 0.16
-                    and not personalized):
-                config.log(
-                    f"personalized short candidate rejected "
-                    f"voiced={voiced_seconds:.2f}s")
-                if not capturing:
-                    player.resume()
-                continue
+                elif (threshold is not None and score != float("inf")
+                        and score <= threshold * NEAR_MISS):
+                    config.log(
+                        f"personalized near-miss score={score:.3f} "
+                        f"threshold={threshold:.3f} {burst_summary(burst)}")
 
             heard = transcribe_local(burst)
             if not heard and not personalized:
                 config.log(f"local transcription empty frames={len(burst)}")
+                record_burst(burst, "empty")
                 if not capturing:
                     player.resume()
                 continue
@@ -749,11 +877,19 @@ def run(device="default", recover_devices=False):
                 config.log(f"heard {heard[:80]!r} capturing={capturing} "
                            f"overlapped={overlapped}")
 
+            playing_now = overlapped or speaking()
+            recent = echo.recent_texts() if playing_now or overlapped else []
+
             # This is a voice-control command, not dictation. It is handled
             # before capture state, never reaches cloud transcription, emits
             # one local confirmation sound, and cannot become a chat message.
-            if (is_stop_talking(heard, overlapped or speaking())
-                    or (personalized == "stop" and (overlapped or speaking()))):
+            stop_heard = is_stop_talking(heard, playing_now)
+            if stop_heard and recent and echo.is_echo(
+                    heard, stop_variants(), recent):
+                config.log("ignored stop phrase echoed from playback")
+                stop_heard = False
+            if stop_heard or (personalized == "stop" and playing_now):
+                record_burst(burst, "stop")
                 player.skip()
                 capturing, captured = False, []
                 set_listener_state("ready")
@@ -761,8 +897,15 @@ def run(device="default", recover_devices=False):
                 config.log("voice-control: skipped current speech block")
                 continue
 
+            woke = personalized == "wake" or contains_wake(heard)
+            if (woke and personalized != "wake" and recent
+                    and echo.is_echo(heard, wake_targets(), recent)):
+                config.log("ignored wake phrase echoed from playback")
+                woke = False
+
             if not capturing:
-                if personalized != "wake" and not contains_wake(heard):
+                record_burst(burst, "wake" if woke else "none")
+                if not woke:
                     player.resume()
                     continue
                 # Barge-in pauses rather than discards. The microphone marker
@@ -771,7 +914,7 @@ def run(device="default", recover_devices=False):
                 # The burst tag reflects whether playback was active while its
                 # frames arrived. Recheck now as well: synthesis can finish and
                 # playback can start while local transcription is running.
-                was_speaking = overlapped or speaking()
+                was_speaking = playing_now
                 player.pause()
                 if was_speaking:
                     config.log("barged in: paused active or pending playback")
@@ -784,10 +927,11 @@ def run(device="default", recover_devices=False):
                 cue("wake")
                 if is_send(heard):
                     capturing, captured = False, []
-                    finish(list(burst))
+                    finish(list(burst), heard)
                 continue
 
             if personalized == "cancel" or is_cancel(heard):
+                record_burst(burst, "cancel")
                 capturing, captured = False, []
                 set_listener_state("ready")
                 cue("cancel")
@@ -795,7 +939,7 @@ def run(device="default", recover_devices=False):
                 player.resume()
                 continue
 
-            if personalized == "wake" or contains_wake(heard):
+            if woke:
                 cue("wake")
                 config.log("wake repeated: capture still active")
 
@@ -803,9 +947,10 @@ def run(device="default", recover_devices=False):
             captured.extend(burst)
             if personalized != "send" and not is_send(heard):
                 continue
+            record_burst(burst, "send")
             capturing = False
             frames, captured = captured, []
-            finish(frames)
+            finish(frames, heard)
     finally:
         # Also releases a provisional pre-recognition turn if local
         # classification failed or the listener exited between yield/handling.

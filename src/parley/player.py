@@ -408,7 +408,15 @@ def drain():
                     continue
                 if not _wait_for_microphone(interrupt):
                     return True
-                played = play(audio, interrupt, skip)
+                from parley import echo
+
+                # The listener compares what it hears with this text so that
+                # a reply mentioning a trigger phrase cannot wake it.
+                echo.remember(spoken_text)
+                try:
+                    played = play(audio, interrupt, skip)
+                finally:
+                    echo.finished()
                 if _interrupt_token() != interrupt:
                     return True
                 if _skip_token() != skip:
