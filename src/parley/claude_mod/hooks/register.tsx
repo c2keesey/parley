@@ -40,6 +40,7 @@ export const WATCHED = [
   'speech.pid',
   'drainer.pid',
   'microphone-turn.pid',
+  'relay-listener.json',
 ]
 
 export type Style = 'quiet' | 'chip' | 'glyph'

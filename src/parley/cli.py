@@ -5,7 +5,7 @@ import subprocess
 import sys
 import time
 
-from parley import __version__, config, hooks
+from parley import __version__, config, hooks, relay
 from parley.player import detach, drain, enqueue, stop
 
 
@@ -95,6 +95,24 @@ def build_parser():
         command = sub.add_parser(name, help=help_text)
         command.add_argument("--harness", choices=sorted(hooks.TARGETS))
 
+    relay_cmd = sub.add_parser(
+        "relay", help="speak and listen on another machine (agents run here)")
+    relay_cmd.add_argument(
+        "state", nargs="?", choices=["status", "set", "off"], default="status")
+    relay_cmd.add_argument(
+        "host", nargs="?", help="set: SSH address of the speaker, e.g. me@my-mac")
+    relay_cmd.add_argument(
+        "--self", dest="self_host",
+        help="set: SSH address the speaker uses to reach this machine")
+
+    remote = sub.add_parser("remote", help=argparse.SUPPRESS)
+    remote.add_argument("op")
+    remote.add_argument("--host", default="")
+    remote.add_argument("--pane", default="")
+    remote.add_argument("--follow", action="store_true")
+    remote.add_argument("--force", action="store_true")
+    remote.add_argument("--device", default="default")
+
     sub.add_parser("hook", help="hook entry point (payload on stdin)")
     indicator = sub.add_parser("indicator", help=argparse.SUPPRESS)
     indicator.add_argument("pane", nargs="?")
@@ -117,7 +135,7 @@ def _report_listener(listener):
     print(f"  personalized triggers {personalized}")
     print(f"  wake {listener.WAKE!r} -> speak -> {listener.SEND!r}")
     pane = listener.get_target()
-    label = listener.indicator.session_label(pane)
+    label = listener.target_label(pane)
     if label:
         print(f"  sends to {label} (pane {pane})")
     else:
@@ -158,6 +176,188 @@ def _stop_owned_listener(listener):
     return listener.stop()
 
 
+def _relay_report(keys, host, prefix="parley"):
+    on = hooks.is_on(keys)
+    where = f"on this session (speech relayed to {host})"
+    print(f"{prefix}: {'on' if on else 'off'} {where if on else 'for this session'}")
+    if on:
+        print(config.PROMPT)
+
+
+def _relay_listener_status(host):
+    try:
+        status = relay.listen_status()
+    except relay.RelayError as exc:
+        print(f"listening: unknown — speaker {host} unreachable ({exc})")
+        return
+    if not status.get("running"):
+        print(f"listening: off (on {host})")
+        return
+    print(f"listening: on (pid {status.get('pid')} on {status.get('speaker')})")
+    print(f"  state {status.get('state')}")
+    print(f"  personalized triggers "
+          f"{'active' if status.get('personalized') else 'not enrolled'}")
+    print(f"  wake {status.get('wake')!r} -> speak -> {status.get('send')!r}")
+    target_host, pane = relay.split_target(status.get("target", ""))
+    here = target_host == relay.self_address()
+    label = status.get("label") or pane or "(none)"
+    if here:
+        label = hooks.session_label() if pane == os.environ.get(
+            "TMUX_PANE") else label
+    print(f"  sends to {label} (pane {pane}"
+          f"{'' if here else ' on ' + (target_host or str(status.get('speaker')))})")
+    if status.get("follow"):
+        print("  follows the Agent Deck session on screen")
+
+
+def _relay_listen_on(listener, host, device="default"):
+    pane = os.environ.get("TMUX_PANE", "")
+    if not pane:
+        print("Not inside tmux — there is no pane to type the message into.",
+              file=sys.stderr)
+        raise SystemExit(1)
+    answer = relay.listen_on(
+        pane, follow=listener.is_agent_deck_pane(pane), device=device)
+    print(f"listening: on — the microphone is on {host}; say "
+          f"{answer.get('wake')!r}, speak, then {answer.get('send')!r}")
+    print(f"  typing into pane {pane} here")
+    return answer
+
+
+def _relay_main(command, args, host):
+    """Commands on a relay remote: voice lives on the speaker."""
+    from parley import indicator
+    from parley import listen as listener
+
+    keys = hooks.session_keys()
+    if command == "toggle":
+        command = "off" if hooks.is_on(keys) else "on"
+
+    if command == "on":
+        try:
+            _relay_listen_on(
+                listener, host, os.environ.get("PARLEY_MIC", "default"))
+        except relay.RelayError as exc:
+            hooks.turn_off(keys)
+            indicator.refresh()
+            raise SystemExit(f"parley: could not start listening on {host}: {exc}")
+        hooks.turn_on(keys)
+        indicator.refresh()
+        _relay_report(keys, host)
+        return
+    if command == "off":
+        hooks.turn_off(keys)
+        relay.stop()
+        try:
+            if relay.listen_off(os.environ.get("TMUX_PANE", "")).get("stopped"):
+                print("listening: stopped")
+        except relay.RelayError as exc:
+            print(f"listening: speaker {host} unreachable ({exc})")
+        indicator.refresh()
+        _relay_report(keys, host)
+        return
+    if command == "status":
+        _relay_report(keys, host)
+        _relay_listener_status(host)
+        return
+
+    if command == "output":
+        state = args.state or "status"
+        if state == "on":
+            hooks.turn_on(keys)
+        elif state == "off":
+            hooks.turn_off(keys)
+            relay.stop()
+        indicator.refresh()
+        _relay_report(keys, host, prefix="output")
+        return
+
+    if command == "listen":
+        state = args.state or "status"
+        if state in ("run", "meter"):
+            raise SystemExit(
+                f"parley: the microphone is on {host}; run `parley listen "
+                f"{state}` there")
+        try:
+            if state == "on":
+                _relay_listen_on(listener, host, args.device)
+            elif state == "off":
+                stopped = relay.listen_off(force=True).get("stopped")
+                print("listening: stopped" if stopped else "listening: not running")
+            else:
+                _relay_listener_status(host)
+        except relay.RelayError as exc:
+            raise SystemExit(f"parley: speaker {host} unreachable: {exc}")
+        indicator.refresh()
+        return
+
+    if command == "say":
+        if not relay.say(
+                " ".join(args.text), voice=args.voice, model=args.model,
+                session=relay.remote_session(relay.self_address(), keys[0]),
+                session_label=hooks.session_label(), wait=args.wait):
+            raise SystemExit(
+                f"parley: could not reach the speaker {host}; "
+                "see ~/.parley/speak.log")
+        return
+
+    if command == "stop":
+        relay.stop()
+        print("parley: queue cleared")
+        return
+
+    if command in ("voices", "enroll", "debug-triggers"):
+        raise SystemExit(
+            f"parley: `parley {command}` uses the speaker's audio; run it on "
+            f"{host}")
+
+
+def _relay_command(args):
+    state = args.state
+    if state == "off":
+        print("relay: off" if relay.disable() else "relay: was not configured")
+        return
+    if state == "set":
+        if not args.host:
+            raise SystemExit("parley relay set needs the speaker's SSH address")
+        relay.configure(args.host, args.self_host)
+    host = relay.speaker()
+    hosts = relay.remote_hosts()
+    if not host:
+        print("relay: off — this machine speaks and listens itself")
+        if hosts:
+            print("  linked remotes: " + ", ".join(hosts))
+        return
+    print(f"relay: speech and listening on {host}; "
+          f"it reaches this machine as {relay.self_address()}")
+    failed = False
+    try:
+        speaker = relay.ping()
+        listening = (f"listener pid {speaker['listener']}"
+                     if speaker.get("listener") else "listener off")
+        print(f"  speaker: parley {speaker.get('version')} on "
+              f"{speaker.get('host')} ({listening})")
+        if not speaker.get("gui"):
+            failed = True
+            print("  ! no Terminal-owned tmux server on the speaker: macOS "
+                  "denies SSH sessions the microphone and keychain")
+        if not speaker.get("whisper"):
+            print("  ! whisper-cli missing on the speaker: brew install whisper-cpp")
+    except relay.RelayError as exc:
+        print(f"  ! speaker unreachable: {exc}")
+        raise SystemExit(1)
+    try:
+        back = relay.ping_back().get("back", {})
+        print(f"  return path: ok (parley {back.get('version')} on "
+              f"{back.get('host')})")
+    except relay.RelayError as exc:
+        failed = True
+        print(f"  ! return path failed: the speaker cannot reach "
+              f"{relay.self_address()} ({exc}); dictation cannot be delivered")
+    if failed:
+        raise SystemExit(1)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # Preserve older scripts without exposing a seventh user-facing toggle.
@@ -173,6 +373,22 @@ def main(argv=None):
 
     if command == "hook":
         hooks.handle(argv=argv)
+        return
+
+    if command == "remote":
+        relay.serve(args.op, host=args.host, pane=args.pane,
+                    follow=args.follow, force=args.force, device=args.device)
+        return
+
+    if command == "relay":
+        _relay_command(args)
+        return
+
+    host = relay.speaker()
+    if host and command in (
+            "on", "off", "toggle", "status", "output", "listen", "say",
+            "stop", "voices", "enroll", "debug-triggers"):
+        _relay_main(command, args, host)
         return
 
     if command == "indicator":

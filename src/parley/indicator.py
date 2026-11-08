@@ -75,16 +75,27 @@ def snapshot(viewing_pane=""):
     ``other`` session (``label`` names it), an ``unavailable`` pane, or
     ``target`` when no viewing pane was given.
     """
-    from parley import hooks, listen
+    from parley import hooks, listen, relay
 
     off = {"state": "off", "route": "", "label": "", "pane": "",
            "warning": False, "text": ""}
     if not listen.is_running():
-        return off
+        # On a relay remote the listener runs on the speaker, which mirrors
+        # its state here over the relay link.
+        mirrored = relay.mirror()
+        if not mirrored:
+            return off
+        if viewing_pane and not hooks.pane_is_on(viewing_pane):
+            return off
+        return _mirrored(viewing_pane, mirrored)
     if viewing_pane and not hooks.pane_is_on(viewing_pane):
         return off
     pane = listen.get_target()
-    _target_session, label = _session(pane)
+    host, _remote_pane = relay.split_target(pane)
+    if host:
+        label = listen.target_label(pane)
+    else:
+        _target_session, label = _session(pane)
     if viewing_pane and pane == viewing_pane:
         route, warning = "this", False
     elif label:
@@ -103,6 +114,35 @@ def snapshot(viewing_pane=""):
     snap = {"state": state, "route": route, "label": label, "pane": pane,
             "warning": warning, "wake": listen.WAKE, "send": listen.SEND,
             "stop": listen.STOP_TALKING}
+    snap["text"] = _render(snap)
+    return snap
+
+
+def _mirrored(viewing_pane, mirrored):
+    """A snapshot drawn from the state the speaker mirrored to this remote."""
+    pane = str(mirrored.get("pane") or "")
+    if pane:
+        label = _session(pane)[1]
+        if viewing_pane and pane == viewing_pane:
+            route, warning = "this", False
+        elif label:
+            route, warning = ("other" if viewing_pane else "target"), bool(viewing_pane)
+        else:
+            route, warning = "unavailable", True
+    else:
+        # The target is on another machine, usually the speaker itself.
+        label = str(mirrored.get("label") or mirrored.get("speaker") or "")
+        route = "other" if viewing_pane else "target"
+        warning = bool(viewing_pane)
+    state = mirrored.get("state")
+    if state not in STATES:
+        state = "ready"
+    snap = {"state": state, "route": route, "label": label, "pane": pane,
+            "warning": warning,
+            "wake": str(mirrored.get("wake") or ""),
+            "send": str(mirrored.get("send") or ""),
+            "stop": str(mirrored.get("stop") or ""),
+            "speaker": str(mirrored.get("speaker") or "")}
     snap["text"] = _render(snap)
     return snap
 

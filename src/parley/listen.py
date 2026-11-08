@@ -481,8 +481,13 @@ def is_agent_deck_pane(pane):
     return result.returncode == 0 and result.stdout.strip().startswith("agentdeck_")
 
 
-def active_deck_target():
-    """The pane shown by the most recently active real terminal client.
+# A local pane running one of these is a window onto another machine. Its
+# client activity is the user typing over there, not at a local session.
+REMOTE_CLIENTS = {"mosh", "mosh-client", "ssh", "et"}
+
+
+def local_deck_focus():
+    """(activity, pane) of the most recently active real terminal client.
 
     Agent Deck also owns several control-mode clients. They have no TTY and
     their activity reflects background rendering, so they must never win input
@@ -491,25 +496,48 @@ def active_deck_target():
     try:
         result = subprocess.run(
             ["tmux", "list-clients", "-F",
-             "#{client_tty}\t#{pane_id}\t#{client_activity}\t#{client_session}"],
+             "#{client_tty}\t#{pane_id}\t#{client_activity}\t#{client_session}"
+             "\t#{pane_current_command}"],
             capture_output=True, text=True, timeout=2, check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return ""
+        return 0, ""
     if result.returncode != 0:
-        return ""
+        return 0, ""
     candidates = []
     for line in result.stdout.splitlines():
-        fields = line.split("\t", 3)
-        if len(fields) != 4:
+        fields = line.split("\t", 4)
+        if len(fields) < 4:
             continue
-        tty, pane, activity, session = fields
+        tty, pane, activity, session = fields[:4]
+        command = fields[4].strip() if len(fields) > 4 else ""
         if not tty or not pane or not session.startswith("agentdeck_"):
+            continue
+        if command in REMOTE_CLIENTS:
             continue
         try:
             candidates.append((int(activity), pane))
         except ValueError:
             continue
+    return max(candidates, default=(0, ""))
+
+
+def active_deck_target():
+    """The pane shown by the most recently active real terminal client.
+
+    With a remote relay, remotes that armed the listener report their own
+    focus over the relay link, and the most recent client on any machine wins.
+    """
+    from parley import relay
+
+    local = local_deck_focus()
+    if not relay.remote_hosts():
+        return local[1]
+    remote = relay.remote_focus()
+    if remote is None:
+        return ""  # a remote's report is overdue; keep the current target
+    candidates = [local] if local[1] else []
+    candidates.extend(remote)
     return max(candidates, default=(0, ""))[1]
 
 
@@ -530,8 +558,41 @@ def sync_target():
 PASTE_BUFFER = "parley-dictation"
 
 
+def target_label(target):
+    """A human name for a dictation target, local or remote."""
+    from parley import relay
+
+    host, pane = relay.split_target(target)
+    if host:
+        return relay.target_label() or (
+            f"{pane} on {relay.short_host(host)}" if pane else "")
+    return indicator.session_label(pane) if pane else ""
+
+
 def inject(text):
     """Paste the message into the session's pane and submit it.
+
+    A pane on another machine is reached through the relay link; see
+    :func:`paste_into` for how the text arrives.
+    """
+    from parley import relay
+
+    target = sync_target()
+    if not target or not text:
+        return False
+    text = " ".join(text.split())
+    host, pane = relay.split_target(target)
+    if host:
+        if relay.inject(host, pane, text):
+            config.log(f"submitted to {pane} on {host} chars={len(text)}")
+            return True
+        config.log(f"submission failed: relay to {host} could not reach {pane}")
+        return False
+    return paste_into(pane, text)
+
+
+def paste_into(pane, text):
+    """Paste text into a local tmux pane and submit it.
 
     The message goes through a tmux paste buffer as one bracketed paste rather
     than through ``send-keys -l``. Typing a long dictation key by key into a
@@ -540,7 +601,6 @@ def inject(text):
     bracketed paste arrives as a single paste event, so the agent's input
     either receives the whole message or none of it.
     """
-    pane = sync_target()
     if not pane or not text:
         return False
     text = " ".join(text.split())
@@ -745,6 +805,11 @@ def run(device="default", recover_devices=False):
     config.log(f"speech gate vad={'webrtc' if vad else 'energy-only'} "
                f"min_rms={gate.MIN_RMS} open_ratio={gate.OPEN_RATIO}")
     indicator.ensure()
+    from parley import relay
+
+    # Follows focus on, and mirrors state to, remotes that armed this listener.
+    link = relay.Link()
+    link.start()
 
     capturing, captured, started, last_heard = False, [], 0.0, 0.0
     last_indicator = time.time()
@@ -954,6 +1019,7 @@ def run(device="default", recover_devices=False):
     finally:
         # Also releases a provisional pre-recognition turn if local
         # classification failed or the listener exited between yield/handling.
+        link.stop()
         if capturing or player.microphone_active():
             player.resume()
         LISTEN_PID.unlink(missing_ok=True)
@@ -978,6 +1044,9 @@ def stop():
             pass
     LISTEN_PID.unlink(missing_ok=True)
     config.LISTENER_STATE.unlink(missing_ok=True)
+    from parley import relay
+
+    relay.clear_hosts()
     indicator.refresh()
     player.resume()
     return bool(pid)

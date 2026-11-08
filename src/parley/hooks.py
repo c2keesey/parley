@@ -183,6 +183,17 @@ def speak_reply(marker_key, payload):
 
     seen.parent.mkdir(parents=True, exist_ok=True)
     seen.write_text(reply_id)
+    from parley import relay
+
+    if relay.speaker():
+        # This machine has no voice of its own: the speaker plays the reply,
+        # announced like a local session but keyed so it cannot collide.
+        relay.say(
+            text,
+            session=relay.remote_session(relay.self_address(), marker_key),
+            session_label=session_label(payload),
+        )
+        return
     enqueue(
         text,
         session=marker_key,
