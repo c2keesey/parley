@@ -46,7 +46,7 @@ OPENAI_FALLBACK_VOICE = os.environ.get("PARLEY_OPENAI_FALLBACK_VOICE", "onyx")
 MACOS_VOICE = os.environ.get("PARLEY_MACOS_VOICE", "Eddy (English (US))")
 MACOS_RATE = int(os.environ.get("PARLEY_MACOS_RATE", "210"))
 ELEVENLABS_MODEL = os.environ.get(
-    "PARLEY_ELEVENLABS_MODEL", "eleven_v4_turbo")
+    "PARLEY_ELEVENLABS_MODEL", "eleven_flash_v2_5")
 ELEVENLABS_VOICE = os.environ.get(
     "PARLEY_ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # George
 ELEVENLABS_KEYCHAIN_SERVICE = os.environ.get(
