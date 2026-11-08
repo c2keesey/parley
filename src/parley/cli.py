@@ -178,8 +178,8 @@ def _stop_owned_listener(listener):
 
 def _relay_report(keys, host, prefix="parley"):
     on = hooks.is_on(keys)
-    where = f"on this session (speech relayed to {host})"
-    print(f"{prefix}: {'on' if on else 'off'} {where if on else 'for this session'}")
+    where = f" (speech relayed to {host})" if on else ""
+    print(f"{prefix}: {'on' if on else 'off'} for this session{where}")
     if on:
         print(config.PROMPT)
 

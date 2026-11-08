@@ -66,3 +66,9 @@ or `ELEVENLABS_API_KEY` is configured. `parley voices` lists available voice
 IDs; George is the default. Never ask the user to paste an API key into chat.
 Long replies are split at sentence boundaries into bounded TTS requests and
 played completely in order; "stop talking" skips only the active chunk.
+
+On a relay remote (a machine where `parley relay` names a speaker, such as a
+Linux box reached over Mosh), every command above works unchanged: speech plays
+on the speaker Mac and its listener types dictation back into this pane. If a
+command reports the speaker unreachable, run `parley relay` to diagnose both
+SSH directions; do not try to start a listener on the remote itself.

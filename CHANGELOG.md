@@ -3,8 +3,13 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
-## Unreleased
+## 0.7.0 — 2026-11-08
 
+- Remote relay: agents on another machine (a Linux box over Mosh or SSH) get
+  the same two-way voice as local ones. `parley relay set <mac>` on the
+  remote forwards replies to the Mac's queue; the Mac's listener types
+  dictation back into the remote pane, follows Agent Deck focus across both
+  machines, and mirrors its state to the remote's band and badge.
 - Redesigned the Claude Code band: quiet at idle (a grey mark and the wake
   phrase), vivid while the microphone is open (a breathing red dot and an
   elapsed timer), with theme colors that hold in light and dark terminals and

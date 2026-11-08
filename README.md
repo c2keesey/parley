@@ -83,7 +83,8 @@ Parley starts with ElevenLabs' George voice and `eleven_flash_v2_5`. Run
 set `PARLEY_ELEVENLABS_VOICE_ID` to the one you want. Set
 `PARLEY_TTS_PROVIDER=openai` at any time to keep using OpenAI for speech.
 
-macOS only for now — playback uses `afplay`. Basic spoken output works without
+The speaker is macOS only for now — playback uses `afplay`; a Linux box can
+still be a remote (see [Agents on another machine](#agents-on-another-machine)). Basic spoken output works without
 `ffmpeg`; hands-free listening requires it for microphone capture and for
 resuming the unspoken remainder after you interrupt a reply.
 
@@ -318,6 +319,46 @@ New Claude Code sessions pick it up; in a running one, `/reload-plugins`.
 Within fifteen seconds of Claude exiting (at once on a clean exit) the pane's
 tmux badge returns.
 
+## Agents on another machine
+
+Coding agents often run on a bigger box than the laptop you talk to: a Linux
+workstation reached over Mosh or SSH, with its own tmux and Agent Deck. Parley
+can give those agents the same two-way voice. The Mac stays the *speaker*,
+holding the microphone and the speakers; the box becomes a *remote*.
+
+Install Parley on both machines (Linux works as a remote), check that each can
+reach the other with key-based SSH, then on the remote run:
+
+```sh
+parley relay set me@my-mac          # the speaker's SSH address
+parley relay                        # check both directions
+```
+
+From then on everything on the remote works as it does locally. `parley on` in
+a remote pane arms the listener on the Mac and points it at that pane; replies
+from the remote are read aloud on the Mac, announced by session like any
+other; a dictated message is typed back into the remote pane; `parley say`,
+`parley stop`, `parley output` and `parley listen` all reach the Mac. The
+Claude Code band and the tmux badge on the remote show the Mac listener's live
+state, because the listener mirrors it there.
+
+In Agent Deck the listener follows the session on screen across machines: the
+most recently active human terminal client wins, whether it is attached to the
+Mac's tmux or, over Mosh, to the remote's. A local pane that is itself running
+`mosh` or `ssh` is a window onto the remote and never wins. If the link to a
+remote drops, the listener keeps its current target rather than swinging to a
+local pane.
+
+How it travels. Each reply is one short `ssh` call over a multiplexed
+connection. The listener keeps one persistent `ssh` link to each remote that
+armed it and exchanges JSON lines over it, so following focus and mirroring
+state cost a few milliseconds and no process start. macOS denies SSH sessions
+the microphone and the login keychain (where the ElevenLabs key lives), so the
+Mac starts the listener and plays relayed speech inside its Terminal-owned tmux
+server, which holds both grants. The Mac therefore needs a tmux server running
+from a terminal there; Agent Deck keeps one. `parley relay` reports when it is
+missing. `parley relay off` returns the machine to speaking for itself.
+
 ## Configuration
 
 Every knob is an environment variable.
@@ -351,6 +392,9 @@ Every knob is an environment variable.
 | `PARLEY_STT_MODEL` | `gpt-4o-transcribe` | cloud model when an OpenAI key exists |
 | `PARLEY_LOCAL_STT_MODEL` | `ggml-base.en.bin` | zero-key local message model, downloaded on first use |
 | `PARLEY_STATE` | `~/.parley` | queue, logs, session flags |
+| `PARLEY_RELAY` | from `parley relay set` | speaker's SSH address on a remote; `off` disables the relay for one shell |
+| `PARLEY_RELAY_SELF` | `user@hostname` | how the speaker reaches the remote back |
+| `PARLEY_REMOTE_BIN` | `parley` | Parley's command on the other machine, if not on its `~/.local/bin` or Homebrew path |
 
 ## How it works
 
