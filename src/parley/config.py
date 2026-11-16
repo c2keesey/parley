@@ -7,6 +7,7 @@ import functools
 import getpass
 import os
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -81,11 +82,13 @@ def private_directory(path):
 def private_write(path, content):
     """Write a private state file without a world-readable creation window."""
     private_directory(path.parent)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    descriptor = os.open(path, flags, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(content)
-    os.chmod(path, 0o600)
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".parley-")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def log(msg):

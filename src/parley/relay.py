@@ -114,8 +114,17 @@ def self_address():
     return f"{getpass.getuser()}@{socket.gethostname().split('.')[0]}"
 
 
+def validate_host(host):
+    """Accept SSH destinations, never command-line options or shell fragments."""
+    if (not isinstance(host, str) or not host or host.startswith("-")
+            or any(c.isspace() or c in "/\\;|&$`'\"<>" for c in host)):
+        raise RelayError("invalid relay host; use an SSH alias or user@hostname")
+    return host
+
+
 def configure(speaker_host, self_host=None):
-    data = {"speaker": speaker_host, "self": self_host or self_address()}
+    data = {"speaker": validate_host(speaker_host),
+            "self": validate_host(self_host or self_address())}
     config.private_write(RELAY_FILE, json.dumps(data, indent=2) + "\n")
     return data
 
@@ -161,6 +170,7 @@ def remote_hosts():
 
 
 def add_host(host):
+    validate_host(host)
     hosts = remote_hosts()
     if host not in hosts:
         hosts.append(host)
@@ -210,6 +220,7 @@ def _ensure_master(host):
     ``ControlPersist`` master would inherit a caller's captured pipes and hold
     them open after the call that created it returned.
     """
+    validate_host(host)
     options = SSH_OPTIONS + _control_options()
     try:
         check = subprocess.run(
@@ -243,6 +254,7 @@ def call(host, args, payload=None, timeout=20):
     """Run ``parley remote <args>`` on host and return its JSON answer."""
     if not host:
         raise RelayError("no relay host configured")
+    validate_host(host)
     _ensure_master(host)
     argv = ["ssh", *SSH_OPTIONS, *_control_options(), "-o", "ControlMaster=no",
             host, remote_command(args)]
@@ -660,7 +672,7 @@ def serve_agent(stdin=None, stdout=None):
 
 def agent_argv(host):
     """A dedicated connection: the link outlives any multiplexing master."""
-    return ["ssh", *SSH_OPTIONS, host, remote_command(["agent"])]
+    return ["ssh", *SSH_OPTIONS, validate_host(host), remote_command(["agent"])]
 
 
 class Agent:

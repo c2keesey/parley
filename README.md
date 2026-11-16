@@ -10,6 +10,14 @@ with. Give an agent a task, lean back or walk away, and hear its response when
 it is ready. Say “okay computer” to reply, then “send it” when you are done.
 No keyboard required.
 
+<p align="center">
+  <img src="docs/images/claude-code-ready.png" alt="Parley above the Claude Code prompt, ready for the wake phrase okay computer" width="960">
+  <img src="docs/images/claude-code-listening.png" alt="Parley listening in Claude Code, showing an elapsed timer and the send it command" width="960">
+</p>
+
+*Claude Code's Parley mod: quiet while ready, with a live timer while dictating.
+Terminal captures use demo state; no microphone recording or private conversation is shown.*
+
 It works with [Claude Code](https://claude.com/claude-code) and
 [Codex](https://developers.openai.com/codex/cli), and it is designed for the
 way people really use them:
@@ -82,6 +90,8 @@ Parley starts with ElevenLabs' George voice and `eleven_flash_v2_5`. Run
 `parley voices` after adding the key to see the voices in your account, then
 set `PARLEY_ELEVENLABS_VOICE_ID` to the one you want. Set
 `PARLEY_TTS_PROVIDER=openai` at any time to keep using OpenAI for speech.
+
+Parley currently requires tmux for hands-free input.
 
 The speaker is macOS only for now — playback uses `afplay`; a Linux box can
 still be a remote (see [Agents on another machine](#agents-on-another-machine)). Basic spoken output works without
@@ -436,8 +446,8 @@ headphones take about that long to switch profiles and will otherwise swallow
 your first few words. The warm-up mitigates profile-switch latency; it cannot
 make an unavailable AirPods route usable before macOS has connected it.
 
-`~/.parley/speak.log` records what was spoken, in which voice, and how
-long synthesis took. It records message lengths and operational events, not
+`~/.parley/speak.log` records which voice was used and how long synthesis
+took. It records message lengths and operational events, not
 the text you dictate or the text spoken back.
 
 ## Privacy
@@ -449,10 +459,10 @@ by the bundled local trigger recognizer but are not retained, unless you
 explicitly start the listener with `PARLEY_RECORD_BURSTS=1`.
 
 When you explicitly send a dictated message, its captured audio is sent to
-OpenAI for transcription. When speech output is enabled, the reply text is sent
-to the configured speech provider: ElevenLabs in `auto` mode when its key is
-available, otherwise OpenAI. Their respective data policies apply. Temporary
-audio, queue items, logs, and personalized trigger features live under
+OpenAI for transcription if an OpenAI key is configured; otherwise it is
+transcribed locally. Speech output uses ElevenLabs, OpenAI, or the built-in
+macOS voice according to your configuration and available keys. Their respective
+data policies apply. Temporary audio, queue items, logs, and personalized trigger features live under
 `~/.parley`; Parley creates sensitive state with user-only permissions. Raw
 enrollment recordings are never saved.
 

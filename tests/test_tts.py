@@ -189,7 +189,7 @@ def test_elevenlabs_error_is_actionable(monkeypatch):
         "url", 401, "Unauthorized", {}, io.BytesIO(b"bad key"))
     monkeypatch.setattr(tts.urllib.request, "urlopen",
                         lambda request, timeout: (_ for _ in ()).throw(error))
-    with pytest.raises(RuntimeError, match="elevenlabs -> 401: bad key"):
+    with pytest.raises(RuntimeError, match="elevenlabs -> HTTP 401"):
         tts.synthesize("hello")
 
 
@@ -202,3 +202,23 @@ def test_elevenlabs_voices_are_listed(monkeypatch):
         ]}).encode()),
     )
     assert tts.voices() == [{"name": "George", "voice_id": "abc"}]
+
+
+@pytest.mark.parametrize("provider", ["openai", "elevenlabs"])
+def test_provider_error_bodies_never_reach_logs(provider, monkeypatch):
+    logs = []
+    monkeypatch.setattr(config, "api_key", lambda: "test-key")
+    monkeypatch.setattr(config, "elevenlabs_api_key", lambda: "test-key")
+    monkeypatch.setattr(config, "log", logs.append)
+
+    def fail(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            "https://example.test", 400, "bad request", {},
+            io.BytesIO(b"private reply and credential reflected by provider"))
+
+    monkeypatch.setattr(tts.urllib.request, "urlopen", fail)
+    with pytest.raises(RuntimeError, match="HTTP 400") as caught:
+        tts.synthesize("private reply", provider=provider)
+    assert "private reply" not in str(caught.value)
+    assert all("private reply" not in line for line in logs)
+    assert all("credential" not in line for line in logs)

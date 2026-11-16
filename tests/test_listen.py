@@ -1107,3 +1107,17 @@ def test_cloud_transcript_that_drops_the_last_sentence_is_repaired(
 ])
 def test_dropped_tail_repair_is_conservative(cloud, local, expected):
     assert listen.repair_dropped_tail(cloud, local) == expected
+
+
+def test_listener_logs_no_ambient_or_dictated_text(tmp_path, monkeypatch):
+    logs = []
+    sent, _, _ = _run_listener(
+        tmp_path, monkeypatch,
+        [([b"ambient"], False), ([b"wake"], False), ([b"send"], False)],
+        ["private ambient conversation", "okay computer", "secret dictation send it"],
+        cloud="secret dictation send it", logs=logs)
+    assert sent == ["secret dictation"]
+    joined = "\n".join(logs)
+    assert "private ambient conversation" not in joined
+    assert "secret dictation" not in joined
+    assert "heard chars=" in joined

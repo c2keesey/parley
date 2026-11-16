@@ -27,14 +27,17 @@ memory until the turn is sent, cancelled, or expires.
 
 ## What leaves the Mac
 
-- On the explicit send command, captured dictation audio is sent to OpenAI's
-  transcription API. The returned text is typed into the selected terminal
-  pane.
+- On the explicit send command, captured dictation audio is sent directly to
+  OpenAI for transcription when an OpenAI key is configured. Without a key,
+  transcription uses a local Whisper model. The returned text is typed into
+  the selected terminal pane.
 - For speech output, assistant reply text is sent to the configured provider.
   `auto` uses ElevenLabs when an ElevenLabs key is available and otherwise uses
-  OpenAI.
+  OpenAI when its key is available, then the built-in macOS voice. In
+  `auto` mode, provider failures also fall back in that order.
 - The first use of hands-free listening downloads the public whisper.cpp tiny
-  English model from Hugging Face.
+  English model from Hugging Face. Local full-message transcription also
+  downloads its configured model on first use.
 
 Parley does not proxy these requests. Your relationship and the provider's
 terms and data policy govern the data sent directly to that provider.
@@ -47,6 +50,12 @@ created with user-only permissions. The local whisper model is cached under
 
 Run `parley listen off`, then delete those two directories to remove local
 runtime state, logs, personalized trigger features, and the downloaded model.
+
+For relayed sessions, reply text travels from the agent machine to the Mac
+over SSH; dictated text travels back over SSH. Both accounts must be trusted:
+the relay can speak replies and type into terminal panes as the logged-in user.
+No public listener or Parley-operated relay server is involved.
+
 `parley uninstall` removes agent hooks; it intentionally leaves runtime state
 in place so uninstalling does not silently destroy user data.
 

@@ -337,3 +337,21 @@ def test_parley_on_in_a_relay_remote_stays_off_when_the_speaker_fails(monkeypatc
     with pytest.raises(SystemExit, match="asleep"):
         cli.main(["on"])
     assert not hooks.pane_is_on("%7")
+
+
+@pytest.mark.parametrize("host", [
+    "-oProxyCommand=touch /tmp/no", "-F/tmp/config", "box\nother",
+    "me@box;command", "$(command)", "", "box/path",
+])
+def test_invalid_relay_hosts_never_start_ssh(host, monkeypatch):
+    monkeypatch.setattr(relay.subprocess, "run",
+                        lambda *a, **k: pytest.fail("must not run SSH"))
+    with pytest.raises(relay.RelayError):
+        relay.call(host, ["ping"])
+    with pytest.raises(relay.RelayError):
+        relay.agent_argv(host)
+
+
+@pytest.mark.parametrize("host", ["my-mac", "me@box.tail.net", "me@::1"])
+def test_normal_ssh_destinations_are_valid(host):
+    assert relay.validate_host(host) == host

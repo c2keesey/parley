@@ -830,7 +830,7 @@ def run(device="default", recover_devices=False):
             # transcript is what told us the message was over.
             if final_heard:
                 message = repair_dropped_tail(message, final_heard)
-            config.log(f"message {message[:80]!r}")
+            config.log(f"message chars={len(message)}")
             if message:
                 inject(message)
         finally:
@@ -939,7 +939,7 @@ def run(device="default", recover_devices=False):
                     player.resume()
                 continue
             if heard:
-                config.log(f"heard {heard[:80]!r} capturing={capturing} "
+                config.log(f"heard chars={len(heard)} capturing={capturing} "
                            f"overlapped={overlapped}")
 
             playing_now = overlapped or speaking()

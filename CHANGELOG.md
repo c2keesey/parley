@@ -3,6 +3,20 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
+## 0.7.1 — 2026-11-16
+
+- Removed ambient recognition and dictation snippets from operational logs.
+  Earlier versions could write the first 80 characters to `~/.parley/speak.log`;
+  delete that file on the speaker Mac if you want to remove retained snippets.
+- Speech-provider errors report the provider and HTTP status without retaining
+  response bodies that could contain private text.
+- Relay destinations reject SSH options and malformed host values before
+  starting a connection.
+- Private state writes now replace files atomically without following a
+  destination symlink.
+- Corrected the privacy documentation for local transcription and the SSH
+  relay, and added Claude Code mod screenshots to the README.
+
 ## 0.7.0 — 2026-11-08
 
 - Remote relay: agents on another machine (a Linux box over Mosh or SSH) get

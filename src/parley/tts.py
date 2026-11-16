@@ -105,8 +105,7 @@ def _openai(text, voice=None, model=None):
         try:
             return call(name)
         except urllib.error.HTTPError as exc:
-            detail = exc.read()[:200].decode(errors="replace")
-            failure = f"{name} -> {exc.code}: {detail}"
+            failure = f"{name} -> HTTP {exc.code}"
             config.log(f"synth failed {failure}")
     raise RuntimeError(failure or "synthesis failed")
 
@@ -140,8 +139,7 @@ def _elevenlabs(text, voice=None, model=None):
     try:
         return urllib.request.urlopen(request, timeout=90).read()
     except urllib.error.HTTPError as exc:
-        detail = exc.read()[:200].decode(errors="replace")
-        failure = f"elevenlabs -> {exc.code}: {detail}"
+        failure = f"elevenlabs -> HTTP {exc.code}"
         config.log(f"synth failed {failure}")
         raise RuntimeError(failure) from exc
 
