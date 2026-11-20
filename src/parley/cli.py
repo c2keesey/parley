@@ -125,10 +125,12 @@ def _report_listener(listener):
     print(f"listening: {'on (pid ' + str(pid) + ')' if pid else 'off'}")
     if not pid:
         return
+    from parley import triggers
+
     print(f"  state {listener.listener_state()}")
-    if listener.triggers.enrolled():
+    if triggers.enrolled():
         personalized = "active"
-    elif listener.triggers.stale():
+    elif triggers.stale():
         personalized = "profile is from an older matcher; run parley enroll"
     else:
         personalized = "not enrolled"

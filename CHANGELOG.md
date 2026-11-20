@@ -3,6 +3,12 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
+## 0.7.2 — 2026-11-19
+
+- The Claude Code status band polls `parley indicator` far more cheaply. Status
+  reads no longer load the microphone matcher (and NumPy), so thirty open
+  sessions now cost about a third of a core instead of about five.
+
 ## 0.7.1 — 2026-11-16
 
 - Removed ambient recognition and dictation snippets from operational logs.

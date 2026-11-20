@@ -1,6 +1,6 @@
 import pytest
 
-from parley import listen
+from parley import listen, triggers
 from parley.listen import (
     contains_phrase,
     contains_wake,
@@ -24,7 +24,7 @@ def isolate_microphone_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(listen.config, "TRIGGERS", tmp_path / "triggers")
     monkeypatch.setattr(listen.config, "STATE", tmp_path)
     monkeypatch.setattr(listen, "TARGET", tmp_path / "target")
-    listen.triggers.load.cache_clear()
+    triggers.load.cache_clear()
     monkeypatch.setattr(listen.indicator, "refresh", lambda: None)
     # Synthetic test tones are not speech to WebRTC's VAD; the gate's own
     # tests cover the VAD path. Here the energy gate alone is deterministic.
@@ -700,8 +700,8 @@ def test_personalized_audio_recovers_wake_and_send_asr_misses(
         (None, 0.8, 0.3),
         ("send", 0.1, 0.3),
     ])
-    monkeypatch.setattr(listen.triggers, "enrolled", lambda: True)
-    monkeypatch.setattr(listen.triggers, "match", lambda frames, allowed: next(matches))
+    monkeypatch.setattr(triggers, "enrolled", lambda: True)
+    monkeypatch.setattr(triggers, "match", lambda frames, allowed: next(matches))
     monkeypatch.setattr(listen, "transcribe_local", lambda frames: next(heard))
     monkeypatch.setattr(
         listen, "transcribe_cloud",
@@ -1012,9 +1012,9 @@ def test_short_burst_outside_capture_never_reaches_whisper(
 
 def test_personalized_miss_never_blocks_whisper(tmp_path, monkeypatch):
     """The matcher used to reject every short burst it did not recognise."""
-    monkeypatch.setattr(listen.triggers, "enrolled", lambda: True)
+    monkeypatch.setattr(triggers, "enrolled", lambda: True)
     monkeypatch.setattr(
-        listen.triggers, "match", lambda frames, allowed: (None, 0.9, 0.3))
+        triggers, "match", lambda frames, allowed: (None, 0.9, 0.3))
     burst = listen.gate.Burst([b"wake"], voiced=0.13)
     sent, actions, _ = _run_listener(
         tmp_path, monkeypatch, [(burst, False), ([b"send"], False)],
@@ -1028,9 +1028,9 @@ def test_personalized_miss_never_blocks_whisper(tmp_path, monkeypatch):
 def test_personalized_near_miss_is_logged_with_score_and_threshold(
         tmp_path, monkeypatch):
     logs = []
-    monkeypatch.setattr(listen.triggers, "enrolled", lambda: True)
+    monkeypatch.setattr(triggers, "enrolled", lambda: True)
     monkeypatch.setattr(
-        listen.triggers, "match", lambda frames, allowed: (None, 0.36, 0.30))
+        triggers, "match", lambda frames, allowed: (None, 0.36, 0.30))
     _run_listener(tmp_path, monkeypatch, [([b"x"], False)], ["hello"],
                   logs=logs)
 

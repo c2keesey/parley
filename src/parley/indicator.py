@@ -75,21 +75,22 @@ def snapshot(viewing_pane=""):
     ``other`` session (``label`` names it), an ``unavailable`` pane, or
     ``target`` when no viewing pane was given.
     """
-    from parley import hooks, listen, relay
+    from parley import hooks
 
     off = {"state": "off", "route": "", "label": "", "pane": "",
            "warning": False, "text": ""}
+    if viewing_pane and not hooks.pane_is_on(viewing_pane):
+        return off
+
+    from parley import listen, relay
+
     if not listen.is_running():
         # On a relay remote the listener runs on the speaker, which mirrors
         # its state here over the relay link.
         mirrored = relay.mirror()
         if not mirrored:
             return off
-        if viewing_pane and not hooks.pane_is_on(viewing_pane):
-            return off
         return _mirrored(viewing_pane, mirrored)
-    if viewing_pane and not hooks.pane_is_on(viewing_pane):
-        return off
     pane = listen.get_target()
     host, _remote_pane = relay.split_target(pane)
     if host:

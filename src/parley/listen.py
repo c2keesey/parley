@@ -30,7 +30,7 @@ import time
 import wave
 from pathlib import Path
 
-from parley import audio, config, cues, echo, gate, indicator, player, triggers
+from parley import audio, config, cues, echo, gate, indicator, player
 from parley.gate import rms  # noqa: F401  (re-exported for callers and tests)
 
 RATE = gate.RATE
@@ -784,6 +784,10 @@ def record_burst(frames, label):
 
 def run(device="default", recover_devices=False):
     """The listening loop. Runs until killed."""
+    # Status readers import this module too. Only microphone work needs the
+    # personalized matcher (and NumPy's native library/thread initialization).
+    from parley import triggers
+
     if not whisper_bin():
         raise SystemExit(
             "whisper-cli not found. Install it with: brew install whisper-cpp")

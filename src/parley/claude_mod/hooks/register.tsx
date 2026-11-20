@@ -6,6 +6,8 @@
 // files Parley writes on every transition (cheap stats through the host) and
 // asks Parley again only when one of them changes, plus a slow heartbeat that
 // catches a listener or player that died without cleaning up.
+// Panes without Parley enabled only stat their own session marker: they never
+// launch Python, including on the heartbeat or another pane's state changes.
 //
 // While it draws, the mod also keeps bands/<pane key> fresh in Parley's state
 // folder; the tmux badge stands aside for a pane with a fresh marker, so a
@@ -34,7 +36,6 @@ export const WATCHED = [
   'listener.state',
   'listener.pid',
   'target',
-  'sessions',
   'queue',
   'playing.pid',
   'speech.pid',
@@ -162,7 +163,6 @@ export const register: Register = (on, options) => {
     let tick = 0
 
     const ask = async () => {
-      isAsking = true
       try {
         const run = await $.process.run([bin, 'indicator', '--json', pane], {
           timeoutMs: 5000,
@@ -181,42 +181,56 @@ export const register: Register = (on, options) => {
         }
       } finally {
         askedAt = await $.clock.now()
-        isAsking = false
       }
     }
 
     const step = async () => {
       if (isAsking) return
-      const now = await $.clock.now()
+      // Cover the entire asynchronous step, including file stats and writes.
+      // Otherwise a slow host can enter multiple ticks before ask sets its guard.
+      isAsking = true
+      try {
+        const now = await $.clock.now()
 
-      if (now - markedAt >= MARKER_MS) {
-        markedAt = now
-        await $.fs.write(marker, String(now)).catch(() => undefined)
-      }
-
-      const marks = await signature($, dir)
-      if (marks !== last || now - askedAt >= HEARTBEAT_MS) {
-        last = marks
-        await ask()
-      }
-
-      // The frame clock: restart on a new state, and move only while the
-      // state itself moves, so an idle band never redraws.
-      const state = (await read($, snapshot))?.state ?? 'off'
-      if (state !== shown) {
-        shown = state
-        since = now
-        tick = 0
-        await update($, frame, () => ({ tick, elapsedMs: 0 }))
-      } else if (ANIMATED.has(state)) {
-        // Redraw only when what is drawn changes: the breath every other
-        // tick, the timer once a second, the spinner every tick.
-        const was = look(state as State, tick, now - since - TICK_MS)
-        tick += 1
-        const moved: ParleyFrame = { tick, elapsedMs: now - since }
-        if (look(state as State, tick, moved.elapsedMs) !== was) {
-          await update($, frame, () => moved)
+        if (now - markedAt >= MARKER_MS) {
+          markedAt = now
+          await $.fs.write(marker, String(now)).catch(() => undefined)
         }
+
+        const enabled = await $.fs.stat(`${dir}/sessions/${paneKey(pane)}`)
+          .then(() => true, () => false)
+        const marks = enabled ? await signature($, dir) : ''
+        if (!enabled) {
+          last = ''
+          if (lastText !== 'null') {
+            lastText = 'null'
+            await update($, snapshot, () => null)
+          }
+        } else if (marks !== last || now - askedAt >= HEARTBEAT_MS) {
+          last = marks
+          await ask()
+        }
+
+        // The frame clock: restart on a new state, and move only while the
+        // state itself moves, so an idle band never redraws.
+        const state = (await read($, snapshot))?.state ?? 'off'
+        if (state !== shown) {
+          shown = state
+          since = now
+          tick = 0
+          await update($, frame, () => ({ tick, elapsedMs: 0 }))
+        } else if (ANIMATED.has(state)) {
+          // Redraw only when what is drawn changes: the breath every other
+          // tick, the timer once a second, the spinner every tick.
+          const was = look(state as State, tick, now - since - TICK_MS)
+          tick += 1
+          const moved: ParleyFrame = { tick, elapsedMs: now - since }
+          if (look(state as State, tick, moved.elapsedMs) !== was) {
+            await update($, frame, () => moved)
+          }
+        }
+      } finally {
+        isAsking = false
       }
     }
 

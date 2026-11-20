@@ -460,7 +460,7 @@ def deliver():
 
 
 def _listener_summary():
-    from parley import listen
+    from parley import listen, triggers
 
     pid = listen.is_running()
     target = listen.get_target()
@@ -481,7 +481,7 @@ def _listener_summary():
         "follow": listen.follows_active(),
         "wake": listen.WAKE,
         "send": listen.SEND,
-        "personalized": listen.triggers.enrolled(),
+        "personalized": triggers.enrolled(),
         "speaker": socket.gethostname().split(".")[0],
     }
 

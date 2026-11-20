@@ -10,6 +10,7 @@ const BAND = {
   requestId: 'above-prompt',
   props: {
     hasSurvey: false,
+    isCollapsed: false,
     isWorking: false,
     maxRows: 10,
     bodyColumns: 100,
@@ -42,6 +43,10 @@ function world(on: On, start: Snap, env: Record<string, string> = { TMUX_PANE: '
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { HOME: '/home/u', ...env })
   const files = new Map<string, number>()
+  const dir = env.PARLEY_STATE || '/home/u/.parley'
+  const pane = env.PARLEY_PANE || env.TMUX_PANE || ''
+  const session = `${dir}/sessions/pane-${pane.replace(/[^A-Za-z0-9_-]/g, '_')}`
+  if (pane) files.set(session, clock.now())
   const writes: [string, string][] = []
   const calls: string[][] = []
   let answer: Snap = start
@@ -80,6 +85,8 @@ function world(on: On, start: Snap, env: Record<string, string> = { TMUX_PANE: '
     calls,
     writes,
     touch: (name: string) => files.set(`/home/u/.parley/${name}`, clock.now()),
+    enable: () => files.set(session, clock.now()),
+    disable: () => files.delete(session),
     answer: (snap: Snap) => {
       answer = snap
     },
@@ -141,6 +148,47 @@ test('an idle band does not redraw; Parley is asked only on the heartbeat', asyn
   expect(w.calls.length).toBe(1)
   await w.clock.advance(2_500)
   expect(w.calls.length).toBe(2)
+})
+
+test('disabled panes never launch Python, even across heartbeats and shared changes', async ($, on) => {
+  const w = world(on, ready)
+  w.disable()
+  await start($)
+  for (let i = 0; i < 20; i++) {
+    w.touch('relay-listener.json')
+    w.touch('sessions')
+    w.touch('queue')
+    await w.clock.advance(1_000)
+  }
+  expect(w.calls.length).toBe(0)
+  expect(await texts($, 'terminal')).toBe('engine')
+})
+
+test('enabling and disabling this pane is noticed within a tick', async ($, on) => {
+  const w = world(on, ready)
+  w.disable()
+  await start($)
+  w.enable()
+  await w.clock.advance(250)
+  expect(w.calls.length).toBe(1)
+  expect(await texts($, 'terminal')).toContain('okay computer')
+  w.disable()
+  await w.clock.advance(250)
+  expect(await texts($, 'terminal')).toBe('engine')
+  await w.clock.advance(8_000)
+  expect(w.calls.length).toBe(1)
+  w.enable()
+  await w.clock.advance(250)
+  expect(w.calls.length).toBe(2)
+})
+
+test('arming another pane does not invalidate this pane snapshot', async ($, on) => {
+  const w = world(on, ready)
+  await start($)
+  w.touch('sessions')
+  w.touch('sessions/pane-_7')
+  await w.clock.advance(250)
+  expect(w.calls.length).toBe(1)
 })
 
 test('the band marks its pane so the tmux badge stands aside', async ($, on) => {
