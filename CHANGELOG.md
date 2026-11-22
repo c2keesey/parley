@@ -3,7 +3,7 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
-## Unreleased
+## 0.8.0 — 2026-11-22
 
 - Experimental tool mode (`parley mode tool`): the final reply is no longer
   read aloud. The agent speaks through a `speak` tool served by `parley mcp`
