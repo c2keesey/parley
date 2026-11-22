@@ -17,7 +17,7 @@ def _report(keys):
     if on:
         # Printed so that turning voice on mid-session lands in the agent's
         # transcript as context, without needing a session-start hook.
-        print(config.PROMPT)
+        print(config.prompt())
 
 
 def _report_output(keys):
@@ -26,7 +26,7 @@ def _report_output(keys):
           f"(provider={config.provider()}, voice={config.active_voice()}, "
           f"model={config.active_model()})")
     if on:
-        print(config.PROMPT)
+        print(config.prompt())
 
 
 def build_parser():
@@ -113,6 +113,11 @@ def build_parser():
     remote.add_argument("--force", action="store_true")
     remote.add_argument("--device", default="default")
 
+    mode = sub.add_parser(
+        "mode", help="how speech is produced: read the reply, or a speak tool")
+    mode.add_argument("state", nargs="?", choices=list(config.OUTPUT_MODES))
+
+    sub.add_parser("mcp", help="MCP server exposing the speak tool (stdio)")
     sub.add_parser("hook", help="hook entry point (payload on stdin)")
     indicator = sub.add_parser("indicator", help=argparse.SUPPRESS)
     indicator.add_argument("pane", nargs="?")
@@ -181,7 +186,7 @@ def _relay_report(keys, host, prefix="parley"):
     where = f" (speech relayed to {host})" if on else ""
     print(f"{prefix}: {'on' if on else 'off'} for this session{where}")
     if on:
-        print(config.PROMPT)
+        print(config.prompt())
 
 
 def _relay_listener_status(host):
@@ -382,6 +387,25 @@ def main(argv=None):
 
     if command == "relay":
         _relay_command(args)
+        return
+
+    if command == "mcp":
+        from parley import mcp_server
+
+        mcp_server.serve()
+        return
+
+    if command == "mode":
+        if args.state:
+            config.set_output_mode(args.state)
+        current = config.output_mode()
+        detail = ("the agent speaks with the speak tool; replies stay on screen"
+                  if current == "tool" else "the final reply is read aloud")
+        print(f"parley mode: {current} ({detail})")
+        if os.environ.get("PARLEY_OUTPUT_MODE"):
+            print("  (set by PARLEY_OUTPUT_MODE in this environment)")
+        if args.state and hooks.is_on(hooks.session_keys()):
+            print(config.prompt())
         return
 
     host = relay.speaker()

@@ -28,6 +28,7 @@ SKIP = STATE / "skip"
 LISTENER_STATE = STATE / "listener.state"
 LAST_SESSION = STATE / "last-spoken-session"
 TRIGGERS = STATE / "triggers"
+OUTPUT_MODE = STATE / "output-mode"
 
 PROMPT = (
     "Spoken session: Parley announces this session's name when output switches "
@@ -37,6 +38,46 @@ PROMPT = (
     "without linking it. "
     "Never use AskUserQuestion; it cannot be answered by voice. Ask in your reply."
 )
+
+TOOL_PROMPT = (
+    "Spoken session (tool mode): your chat text is NOT read aloud. The only way "
+    "to reach the user's ears is the Parley `speak` tool (mcp__parley__speak; "
+    "`parley say \"...\"` in a shell is the fallback). Write your chat reply as "
+    "you normally would, markdown and code included, and call `speak` with what "
+    "the user should hear: plain conversational sentences, no markdown, code, "
+    "URLs, or file paths. Speak when you finish a turn, and also mid-task when "
+    "a heads-up or a question is worth hearing. A turn that never calls `speak` "
+    "is silent. "
+    "Never use AskUserQuestion; it cannot be answered by voice. Ask out loud."
+)
+
+OUTPUT_MODES = ("reply", "tool")
+
+
+def output_mode():
+    """How speech reaches the user: 'reply' reads the final message aloud,
+    'tool' speaks only what the agent passes to the speak tool."""
+    mode = os.environ.get("PARLEY_OUTPUT_MODE", "").strip().lower()
+    if not mode:
+        try:
+            mode = OUTPUT_MODE.read_text().strip().lower()
+        except OSError:
+            mode = ""
+    return mode if mode in OUTPUT_MODES else "reply"
+
+
+def set_output_mode(mode):
+    if mode not in OUTPUT_MODES:
+        raise ValueError(f"output mode must be one of {', '.join(OUTPUT_MODES)}")
+    if mode == "reply":
+        OUTPUT_MODE.unlink(missing_ok=True)
+    else:
+        private_write(OUTPUT_MODE, mode + "\n")
+
+
+def prompt():
+    """The instruction an agent gets when voice turns on, for the active mode."""
+    return TOOL_PROMPT if output_mode() == "tool" else PROMPT
 
 PROVIDER = os.environ.get("PARLEY_TTS_PROVIDER", "auto").lower()
 MODEL = os.environ.get("PARLEY_MODEL", "gpt-4o-mini-tts-2025-12-15")

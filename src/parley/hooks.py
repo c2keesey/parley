@@ -225,6 +225,10 @@ def handle(stream=None, argv=None):
     keys = session_keys(payload)
     if not is_on(keys):
         return
+    if config.output_mode() == "tool":
+        # The agent speaks through the speak tool; its written reply is
+        # meant for the screen.
+        return
     detach(lambda: speak_reply(keys[0], payload))
 
 
@@ -287,9 +291,13 @@ def _claude():
 
 
 def _claude_plugin(claude, *args):
+    return _claude_cli(claude, "plugin", *args)
+
+
+def _claude_cli(claude, *args):
     try:
         return subprocess.run(
-            [claude, "plugin", *args], capture_output=True, text=True,
+            [claude, *args], capture_output=True, text=True,
             timeout=120, check=False, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError) as error:
         return SimpleNamespace(returncode=1, stdout="", stderr=str(error))
@@ -331,6 +339,81 @@ def uninstall_mod():
     return removed
 
 
+# The MCP server that gives the agent its `speak` tool. Registered alongside
+# the hook so tool mode (`parley mode tool`) works with no further setup.
+MCP_NAME = "parley"
+MCP_ARGS = ["mcp"]
+CODEX_CONFIG = Path.home() / ".codex" / "config.toml"
+CODEX_MCP_BLOCK = (
+    "# parley: speak tool (managed by `parley install`)\n"
+    f"[mcp_servers.{MCP_NAME}]\n"
+    'command = "parley"\n'
+    'args = ["mcp"]\n'
+)
+
+
+def install_mcp(harness=None):
+    """Register the speak-tool MCP server with each harness. Idempotent."""
+    installed = []
+    if harness in (None, "claude-code") and (
+            harness or TARGETS["claude-code"].parent.exists()):
+        claude = _claude()
+        manual = f"claude mcp add --scope user {MCP_NAME} -- parley mcp"
+        if not claude:
+            print(f"claude-code: speak tool not registered (no `claude` on "
+                  f"PATH); later run: {manual}")
+        else:
+            listed = _claude_cli(claude, "mcp", "get", MCP_NAME)
+            if listed.returncode == 0:
+                print(f"claude-code: speak tool already registered ({MCP_NAME})")
+            else:
+                result = _claude_cli(
+                    claude, "mcp", "add", "--scope", "user", MCP_NAME,
+                    "--", "parley", *MCP_ARGS)
+                if result.returncode == 0:
+                    installed.append("claude-code")
+                    print(f"claude-code: speak tool registered "
+                          f"(mcp__{MCP_NAME}__speak)")
+                else:
+                    print(f"claude-code: speak tool not registered; try: {manual}")
+    if harness in (None, "codex") and (harness or CODEX_CONFIG.parent.exists()):
+        text = CODEX_CONFIG.read_text() if CODEX_CONFIG.exists() else ""
+        if f"[mcp_servers.{MCP_NAME}]" in text:
+            print(f"codex: speak tool already registered ({CODEX_CONFIG})")
+        else:
+            CODEX_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+            if CODEX_CONFIG.exists():
+                shutil.copy2(CODEX_CONFIG, CODEX_CONFIG.with_suffix(
+                    ".toml.parley-backup"))
+            separator = "\n" if text and not text.endswith("\n\n") else ""
+            if text and not text.endswith("\n"):
+                separator = "\n\n"
+            CODEX_CONFIG.write_text(text + separator + CODEX_MCP_BLOCK)
+            installed.append("codex")
+            print(f"codex: speak tool registered ({CODEX_CONFIG})")
+    return installed
+
+
+def uninstall_mcp(harness=None):
+    removed = []
+    if harness in (None, "claude-code"):
+        claude = _claude()
+        if claude and _claude_cli(
+                claude, "mcp", "remove", "--scope", "user",
+                MCP_NAME).returncode == 0:
+            removed.append("claude-code")
+            print("claude-code: speak tool removed")
+    if harness in (None, "codex") and CODEX_CONFIG.exists():
+        text = CODEX_CONFIG.read_text()
+        if CODEX_MCP_BLOCK in text:
+            CODEX_CONFIG.write_text(
+                text.replace("\n" + CODEX_MCP_BLOCK, "\n")
+                .replace(CODEX_MCP_BLOCK, ""))
+            removed.append("codex")
+            print(f"codex: speak tool removed ({CODEX_CONFIG})")
+    return removed
+
+
 def install(harness=None):
     """Add the Stop hook wherever the harness expects it. Idempotent."""
     installed = []
@@ -356,6 +439,7 @@ def install(harness=None):
         installed.append(name)
         print(f"{name}: installed ({path})")
     install_skill(harness)
+    install_mcp(harness)
     if harness == "claude-code" or (
             not harness and TARGETS["claude-code"].parent.exists()):
         install_mod()
@@ -389,6 +473,7 @@ def uninstall(harness=None):
             print(f"{name}: removed ({path})")
     if harness in (None, "claude-code"):
         uninstall_mod()
+    uninstall_mcp(harness)
     if not removed:
         print("No hooks to remove")
     return removed

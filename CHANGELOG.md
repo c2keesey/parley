@@ -3,6 +3,16 @@
 All notable user-facing changes are documented here. Parley follows semantic
 versioning while it is in beta.
 
+## Unreleased
+
+- Experimental tool mode (`parley mode tool`): the final reply is no longer
+  read aloud. The agent speaks through a `speak` tool served by `parley mcp`
+  (`mcp__parley__speak` in Claude Code), so the written reply stays a normal
+  written reply and what the user hears is composed for the ear. `parley
+  install` registers the MCP server with Claude Code and Codex.
+- The test suite no longer plays sounds, writes to `~/.parley/speak.log`, or
+  touches real harness configs.
+
 ## 0.7.0 — 2026-11-08
 
 - Remote relay: agents on another machine (a Linux box over Mosh or SSH) get
