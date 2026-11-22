@@ -11,7 +11,7 @@ reports both states. Say which you did, then continue with the work. Do not run
 `parley listen on` separately after `parley on`; use it only when the user
 explicitly wants input without output or wants to reroute the listener.
 
-While voice is on:
+While voice is on (in the default reply mode):
 
 - Your reply is read aloud after Parley announces this session's name when
   output switches sessions. Consecutive replies from the same session omit the
@@ -22,6 +22,15 @@ While voice is on:
   ask in your reply instead.
 - Use `parley say "..."` to speak during a long task, so the user is not left
   in silence. It queues behind whatever is already speaking.
+
+In tool mode (`parley mode` reports it; `parley on` prints the matching
+instructions) the reply is NOT read aloud. Write the chat reply normally,
+markdown and code included, and call the `speak` tool (`mcp__parley__speak`)
+with what the user should hear, in plain spoken sentences. Speak at the end of
+every turn and whenever a mid-task heads-up or question is worth hearing; a
+turn without a `speak` call is silent. If the tool is unavailable, `parley say
+"..."` does the same thing. Switch modes only when the user asks: `parley mode
+tool` or `parley mode reply`.
 
 For hands-free input, the user says "okay computer", speaks, then "send it",
 and the message is typed into the session. "scratch that" or "scrap that" as

@@ -329,6 +329,29 @@ New Claude Code sessions pick it up; in a running one, `/reload-plugins`.
 Within fifteen seconds of Claude exiting (at once on a clean exit) the pane's
 tmux badge returns.
 
+## Tool mode (experimental)
+
+By default Parley reads each finished reply aloud, so the agent has to write
+for the ear: no markdown, no code, no paths. Tool mode turns that around.
+
+```sh
+parley mode tool     # the agent speaks only through its speak tool
+parley mode reply    # back to reading the final reply aloud (default)
+```
+
+In tool mode the Stop hook stays silent. The agent writes its chat reply as it
+normally would, tables and code included, and calls the `speak` tool
+(`mcp__parley__speak` in Claude Code) with what you should hear: a spoken
+summary at the end of a turn, a heads-up mid-task, or a question. A turn that
+never calls `speak` is silent. `PARLEY_OUTPUT_MODE=tool` sets the mode for one
+environment.
+
+The tool is served by `parley mcp`, a stdio MCP server that `parley install`
+registers with Claude Code (`claude mcp add --scope user parley -- parley
+mcp`) and Codex (`[mcp_servers.parley]` in `~/.codex/config.toml`). It speaks
+only for sessions where Parley is on, and routes through the relay on a
+remote just like `parley say`.
+
 ## Agents on another machine
 
 Coding agents often run on a bigger box than the laptop you talk to: a Linux
